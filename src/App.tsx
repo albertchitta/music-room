@@ -1,12 +1,11 @@
-import React, { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Music,
   Users,
   Search,
   Play,
   Pause,
-  Volume2,
-  Share2,
+  Copy,
   LogIn,
   Loader,
   SkipForward,
@@ -14,6 +13,10 @@ import {
   X,
   List,
 } from "lucide-react";
+import { Button } from "./components/ui/button";
+import { Field, FieldGroup, FieldLabel, FieldSet } from "./components/ui/field";
+import { Input } from "./components/ui/input";
+import { ButtonGroup } from "./components/ui/button-group";
 
 // Add your YouTube API key here or use environment variable
 const YOUTUBE_API_KEY =
@@ -522,7 +525,7 @@ export default function YouTubeMusicRoom() {
   // Home View
   if (view === "home") {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-purple-600 via-pink-500 to-red-500 flex items-center justify-center p-4">
+      <div className="min-h-screen bg-linear-to-br from-teal-600 via-blue-500 to-red-500 flex items-center justify-center p-4">
         <div className="bg-white rounded-3xl shadow-2xl p-8 max-w-md w-full">
           <div className="flex items-center justify-center mb-8">
             <Music className="w-16 h-16 text-purple-600" />
@@ -531,25 +534,28 @@ export default function YouTubeMusicRoom() {
             Music Room
           </h1>
           <p className="text-center text-gray-600 mb-8">
-            Listen to YouTube together
+            Listen to music together
           </p>
 
           <div className="space-y-4">
-            <button
+            <Button
               onClick={() => setView("create")}
-              className="w-full bg-purple-600 text-white py-4 rounded-xl font-semibold hover:bg-purple-700 transition flex items-center justify-center gap-2"
+              size="lg"
+              className="w-full p-6"
             >
               <Music className="w-5 h-5" />
               Create Room
-            </button>
+            </Button>
 
-            <button
+            <Button
               onClick={() => setView("join")}
-              className="w-full bg-pink-600 text-white py-4 rounded-xl font-semibold hover:bg-pink-700 transition flex items-center justify-center gap-2"
+              size="lg"
+              variant="outline"
+              className="w-full p-6"
             >
               <LogIn className="w-5 h-5" />
-              Join Room
-            </button>
+              Join room
+            </Button>
           </div>
         </div>
       </div>
@@ -559,39 +565,42 @@ export default function YouTubeMusicRoom() {
   // Create Room View
   if (view === "create") {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-purple-600 via-pink-500 to-red-500 flex items-center justify-center p-4">
+      <div className="min-h-screen bg-linear-to-br from-teal-600 via-blue-500 to-red-500 flex items-center justify-center p-4">
         <div className="bg-white rounded-3xl shadow-2xl p-8 max-w-md w-full">
           <h2 className="text-3xl font-bold mb-6 text-gray-800">
             Create a Room
           </h2>
 
-          <div className="space-y-4">
+          <div className="space-y-12">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Your Name
-              </label>
-              <input
-                type="text"
-                value={userName}
-                onChange={(e) => setUserName(e.target.value)}
-                placeholder="Enter your name"
-                className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-purple-600 focus:outline-none"
-              />
+              <FieldSet>
+                <FieldGroup>
+                  <Field>
+                    <FieldLabel htmlFor="username">Your Name</FieldLabel>
+                    <Input
+                      id="username"
+                      type="text"
+                      placeholder="Enter your name"
+                      value={userName}
+                      onChange={(e) => setUserName(e.target.value)}
+                    />
+                  </Field>
+                </FieldGroup>
+              </FieldSet>
             </div>
 
-            <button
-              onClick={createRoom}
-              className="w-full bg-purple-600 text-white py-4 rounded-xl font-semibold hover:bg-purple-700 transition"
-            >
-              Create Room
-            </button>
-
-            <button
-              onClick={() => setView("home")}
-              className="w-full bg-gray-200 text-gray-700 py-4 rounded-xl font-semibold hover:bg-gray-300 transition"
-            >
-              Back
-            </button>
+            <div className="flex justify-between">
+              <Button
+                onClick={() => setView("home")}
+                size="lg"
+                variant="outline"
+              >
+                Back
+              </Button>
+              <Button onClick={createRoom} size="lg">
+                Create Room
+              </Button>
+            </div>
           </div>
         </div>
       </div>
@@ -601,50 +610,53 @@ export default function YouTubeMusicRoom() {
   // Join Room View
   if (view === "join") {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-purple-600 via-pink-500 to-red-500 flex items-center justify-center p-4">
+      <div className="min-h-screen bg-linear-to-br from-teal-600 via-blue-500 to-red-500 flex items-center justify-center p-4">
         <div className="bg-white rounded-3xl shadow-2xl p-8 max-w-md w-full">
           <h2 className="text-3xl font-bold mb-6 text-gray-800">Join a Room</h2>
 
-          <div className="space-y-4">
+          <div className="space-y-12">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Your Name
-              </label>
-              <input
-                type="text"
-                value={userName}
-                onChange={(e) => setUserName(e.target.value)}
-                placeholder="Enter your name"
-                className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-pink-600 focus:outline-none"
-              />
+              <FieldSet>
+                <FieldGroup>
+                  <Field>
+                    <FieldLabel htmlFor="username">Your Name</FieldLabel>
+                    <Input
+                      id="username"
+                      type="text"
+                      placeholder="Enter your name"
+                      value={userName}
+                      onChange={(e) => setUserName(e.target.value)}
+                    />
+                  </Field>
+
+                  <Field>
+                    <FieldLabel htmlFor="room-id">Room ID</FieldLabel>
+                    <Input
+                      id="room-id"
+                      type="text"
+                      placeholder="Enter room ID"
+                      value={joinRoomId}
+                      onChange={(e) =>
+                        setJoinRoomId(e.target.value.toUpperCase())
+                      }
+                    />
+                  </Field>
+                </FieldGroup>
+              </FieldSet>
             </div>
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Room ID
-              </label>
-              <input
-                type="text"
-                value={joinRoomId}
-                onChange={(e) => setJoinRoomId(e.target.value.toUpperCase())}
-                placeholder="Enter room ID"
-                className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-pink-600 focus:outline-none uppercase"
-              />
+            <div className="flex justify-between">
+              <Button
+                onClick={() => setView("home")}
+                size="lg"
+                variant="outline"
+              >
+                Back
+              </Button>
+              <Button onClick={joinRoom} size="lg">
+                Join Room
+              </Button>
             </div>
-
-            <button
-              onClick={joinRoom}
-              className="w-full bg-pink-600 text-white py-4 rounded-xl font-semibold hover:bg-pink-700 transition"
-            >
-              Join Room
-            </button>
-
-            <button
-              onClick={() => setView("home")}
-              className="w-full bg-gray-200 text-gray-700 py-4 rounded-xl font-semibold hover:bg-gray-300 transition"
-            >
-              Back
-            </button>
           </div>
         </div>
       </div>
@@ -653,41 +665,33 @@ export default function YouTubeMusicRoom() {
 
   // Room View
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-600 via-pink-500 to-red-500 p-4">
+    <div className="min-h-screen bg-slate-950 p-4">
       <div className="max-w-6xl mx-auto">
         {/* Header */}
         <div className="bg-white rounded-2xl shadow-xl p-6 mb-4">
           <div className="flex items-center justify-between flex-wrap gap-4">
             <div>
-              <h1 className="text-2xl font-bold text-gray-800">
-                Room: {roomId}
-              </h1>
+              <div className="flex align-middle space-x-2">
+                <h1 className="text-2xl font-bold text-gray-800">
+                  Room: {roomId}
+                </h1>
+                <Button onClick={copyRoomId} variant="ghost">
+                  <Copy className="w-4 h-4" />
+                </Button>
+              </div>
               <p className="text-gray-600">
                 Listening with {members.length}{" "}
                 {members.length === 1 ? "person" : "people"}
               </p>
             </div>
             <div className="flex gap-2">
-              <button
-                onClick={() => setShowQueue(!showQueue)}
-                className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition flex items-center gap-2"
-              >
+              <Button onClick={() => setShowQueue(!showQueue)} size="lg">
                 <List className="w-4 h-4" />
                 Queue ({queue.length})
-              </button>
-              <button
-                onClick={copyRoomId}
-                className="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition flex items-center gap-2"
-              >
-                <Share2 className="w-4 h-4" />
-                Share
-              </button>
-              <button
-                onClick={leaveRoom}
-                className="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition"
-              >
+              </Button>
+              <Button onClick={leaveRoom} size="lg" variant="destructive">
                 Leave
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -762,19 +766,21 @@ export default function YouTubeMusicRoom() {
               <h3 className="text-xl font-bold text-gray-800 mb-4">
                 Search YouTube
               </h3>
-              <div className="flex gap-2 mb-4">
-                <input
+              <ButtonGroup className="w-full">
+                <Input
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  onKeyPress={(e) => e.key === "Enter" && searchYouTube()}
+                  onKeyUp={(e) => e.key === "Enter" && searchYouTube()}
                   placeholder="Search for a song..."
-                  className="flex-1 px-4 py-3 rounded-lg border-2 border-gray-200 focus:border-purple-600 focus:outline-none"
+                  className="h-10"
                 />
-                <button
+                <Button
                   onClick={searchYouTube}
                   disabled={isSearching}
-                  className="bg-purple-600 text-white px-6 py-3 rounded-lg hover:bg-purple-700 transition flex items-center gap-2 disabled:opacity-50"
+                  size="lg"
+                  variant="outline"
+                  aria-label="Search"
                 >
                   {isSearching ? (
                     <Loader className="w-5 h-5 animate-spin" />
@@ -782,8 +788,8 @@ export default function YouTubeMusicRoom() {
                     <Search className="w-5 h-5" />
                   )}
                   Search
-                </button>
-              </div>
+                </Button>
+              </ButtonGroup>
 
               {/* Search Results */}
               {searchResults.length > 0 && (
