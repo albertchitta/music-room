@@ -104,9 +104,9 @@ export default function YouTubeMusicRoom() {
         true
       );
 
-      if (videoResult && videoResult.value) {
+      if (videoResult && videoResult) {
         try {
-          const video = JSON.parse(videoResult.value);
+          const video = JSON.parse(videoResult);
           if (video && video !== null) {
             setCurrentVideo(video);
           } else {
@@ -117,24 +117,24 @@ export default function YouTubeMusicRoom() {
           setCurrentVideo(null);
         }
       }
-      if (queueResult && queueResult.value) {
+      if (queueResult && queueResult) {
         try {
-          setQueue(JSON.parse(queueResult.value));
+          setQueue(JSON.parse(queueResult));
         } catch (e) {
           console.error("Error parsing queue:", e);
           setQueue([]);
         }
       }
-      if (membersResult && membersResult.value) {
+      if (membersResult && membersResult) {
         try {
-          setMembers(JSON.parse(membersResult.value));
+          setMembers(JSON.parse(membersResult));
         } catch (e) {
           console.error("Error parsing members:", e);
         }
       }
-      if (playingResult && playingResult.value) {
+      if (playingResult && playingResult) {
         try {
-          setIsPlaying(JSON.parse(playingResult.value));
+          setIsPlaying(JSON.parse(playingResult));
         } catch (e) {
           console.error("Error parsing playing state:", e);
           setIsPlaying(false);
@@ -237,7 +237,7 @@ export default function YouTubeMusicRoom() {
         return;
       }
 
-      const currentMembers = JSON.parse(membersResult.value);
+      const currentMembers = JSON.parse(membersResult);
       const updatedMembers = [
         ...currentMembers,
         { name: userName, joinedAt: Date.now() },
@@ -426,9 +426,9 @@ export default function YouTubeMusicRoom() {
       );
       let currentQueue = [];
 
-      if (queueResult && queueResult.value) {
+      if (queueResult && queueResult) {
         try {
-          currentQueue = JSON.parse(queueResult.value);
+          currentQueue = JSON.parse(queueResult);
         } catch (e) {
           console.error("Error parsing queue:", e);
           currentQueue = [];
