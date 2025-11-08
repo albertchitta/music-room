@@ -73,16 +73,25 @@ interface YouTubeApiItem {
   };
 }
 
+interface YouTubePlayerTarget {
+  playVideo: () => void;
+  pauseVideo: () => void;
+  seekTo: (seconds: number, allowSeekAhead: boolean) => void;
+  getCurrentTime: () => number;
+  getPlayerState: () => number;
+  loadVideoById: (params: { videoId: string; startSeconds: number }) => void;
+  stopVideo: () => void;
+  destroy: () => void;
+  getVideoData: () => { video_id: string };
+}
+
 interface YouTubePlayerEvent {
-  target: {
-    playVideo: () => void;
-    pauseVideo: () => void;
-    seekTo: (seconds: number, allowSeekAhead: boolean) => void;
-  };
+  target: YouTubePlayerTarget;
 }
 
 interface YouTubeStateChangeEvent {
   data: number;
+  target: YouTubePlayerTarget;
 }
 
 interface SearchResult {
@@ -119,6 +128,13 @@ export default function MusicRoom() {
   const playerRef = useRef<InstanceType<typeof window.YT.Player>>(null);
   const [playerReady, setPlayerReady] = useState<boolean>(false);
   const wsRef = useRef<WebSocket | null>(null);
+  const queueRef = useRef<QueueItem[]>([]);
+
+  // keep a ref to the latest queue so callbacks created earlier can
+  // access up-to-date queue contents without needing to be re-created
+  useEffect(() => {
+    queueRef.current = queue;
+  }, [queue]);
 
   // Wait for a WebSocket to open (or timeout)
   const waitForWsOpen = useCallback(
@@ -198,10 +214,23 @@ export default function MusicRoom() {
               msg.roomId === (subscribeRoomId || roomId)
             ) {
               const s = msg.state || {};
-              setMembers(s.members || []);
-              setQueue(s.queue || []);
-              setCurrentVideo(s.currentVideo || null);
-              setIsPlaying(!!s.playing);
+              if (msg.type === "room_state") {
+                setMembers(s.members || []);
+                setQueue(s.queue || []);
+                setCurrentVideo(s.currentVideo || null);
+                setIsPlaying(!!s.playing);
+              } else if (
+                msg.type === "updateTimestamp" &&
+                s.currentVideo?.timestamp
+              ) {
+                // Only update timestamp if the video hasn't changed
+                setCurrentVideo((prev) => {
+                  if (prev && prev.id === s.currentVideo.id) {
+                    return { ...prev, timestamp: s.currentVideo.timestamp };
+                  }
+                  return prev;
+                });
+              }
             }
           } catch (e) {
             console.error("WS message parse error:", e);
@@ -251,10 +280,17 @@ export default function MusicRoom() {
         return;
       }
 
+      console.log("Initializing player for video:", videoId);
+
       // Clear any existing content in case there's a stale iframe
       container.innerHTML = "";
 
-      playerRef.current = new window.YT.Player("youtube-player", {
+      // Create a new div for the player
+      const playerDiv = document.createElement("div");
+      playerDiv.id = "youtube-player-inner";
+      container.appendChild(playerDiv);
+
+      playerRef.current = new window.YT.Player("youtube-player-inner", {
         height: "100%",
         width: "100%",
         videoId: videoId,
@@ -263,8 +299,47 @@ export default function MusicRoom() {
           controls: 1,
           modestbranding: 1,
           rel: 0,
+          loop: 0,
+          playlist: "",
         },
         events: {
+          onError: (err: unknown) => {
+            console.error("YouTube player encountered an error:", err);
+            // Try to skip to the next video after a short delay so the iframe
+            // has time to settle. Use queueRef to avoid stale closures.
+            setTimeout(() => {
+              try {
+                const q = queueRef.current || [];
+                console.log("Queue snapshot onError:", q);
+                if (q.length > 0) {
+                  console.log(
+                    "Skipping to next due to player error, next:",
+                    q[0]
+                  );
+                  // call playVideo directly for first queued item
+                  playVideo(q[0]).catch((e) =>
+                    console.error("Error auto-playing next after error:", e)
+                  );
+                  // then update queue
+                  const updated = q.slice(1);
+                  setQueue(updated);
+                  wsRef.current?.send(
+                    JSON.stringify({
+                      type: "updateQueue",
+                      roomId,
+                      state: { queue: updated },
+                    })
+                  );
+                } else {
+                  // no queued items, clear state
+                  setCurrentVideo(null);
+                  setIsPlaying(false);
+                }
+              } catch (e) {
+                console.error("Error handling player onError:", e);
+              }
+            }, 500);
+          },
           onReady: (event: YouTubePlayerEvent) => {
             console.log("Player ready - initializing state");
             // Initialize with current state
@@ -289,12 +364,123 @@ export default function MusicRoom() {
             // Handle all player state changes
             switch (event.data) {
               case -1: // unstarted
+                // Video is not yet started, attempt to play if needed
+                if (isPlaying) {
+                  event.target.playVideo();
+                }
                 break;
-              case 0: // ended
-                await playNextInQueue();
+              case 0: {
+                // ended
+                console.log("Video ended, checking queue");
+
+                // Ensure player is fully stopped first
+                // if (playerRef.current) {
+                //   try {
+                //     playerRef.current.stopVideo?.();
+                //   } catch (e) {
+                //     console.error("Error stopping player on end:", e);
+                //   }
+                // }
+
+                // If there's no queued song, clear state and stop
+                // const q = queueRef.current || [];
+                // if (!q || q.length === 0) {
+                //   console.log(
+                //     "Queue empty, stopping playback and clearing player"
+                //   );
+                //   try {
+                //     // First stop the current video
+                //     if (playerRef.current) {
+                //       playerRef.current.stopVideo?.();
+                //       // Load an empty video ID to prevent auto-repeat
+                //       playerRef.current.loadVideoById?.({
+                //         videoId: "",
+                //         startSeconds: 0,
+                //       });
+                //       // Clear the iframe src as a fallback
+                //       const iframe = document.querySelector("#youtube-player");
+                //       if (iframe instanceof HTMLIFrameElement) {
+                //         iframe.src = "about:blank";
+                //       }
+                //     }
+
+                //     // Then update server state
+                //     wsRef.current?.send(
+                //       JSON.stringify({
+                //         type: "updateVideo",
+                //         roomId,
+                //         state: { currentVideo: null },
+                //       })
+                //     );
+                //     wsRef.current?.send(
+                //       JSON.stringify({
+                //         type: "updatePlaying",
+                //         roomId,
+                //         state: { playing: false },
+                //       })
+                //     );
+
+                //     // Finally update local state
+                //     setCurrentVideo(null);
+                //     setIsPlaying(false);
+                //   } catch (e) {
+                //     console.error("Error stopping playback:", e);
+                //   }
+                //   return;
+                // }
+
+                // Take the next item from the current queue snapshot and play it
+                const next =
+                  (queueRef.current && queueRef.current[0]) || undefined;
+                if (next) {
+                  try {
+                    await playVideo(next);
+                  } catch (e) {
+                    console.error("Error playing next video on end:", e);
+                  }
+
+                  // Remove the played item from the queue and notify server
+                  const updatedQueue = (queueRef.current || []).slice(1);
+                  try {
+                    wsRef.current?.send(
+                      JSON.stringify({
+                        type: "updateQueue",
+                        roomId,
+                        state: { queue: updatedQueue },
+                      })
+                    );
+                  } catch (e) {
+                    console.error("WS send error updating queue on end:", e);
+                  }
+                  setQueue(updatedQueue);
+                }
+
                 break;
-              case 1: // playing
-                await updatePlayingState(true);
+              }
+              case 1:
+                {
+                  // playing
+                  // When video starts playing, get the current time
+                  const newTime = event.target.getCurrentTime();
+                  // If there was a significant seek, update others
+                  if (
+                    currentVideo &&
+                    Math.abs(newTime - (currentVideo.timestamp || 0)) > 2
+                  ) {
+                    console.log("Detected seek to:", newTime);
+                    wsRef.current?.send(
+                      JSON.stringify({
+                        type: "updateTimestamp",
+                        roomId,
+                        state: {
+                          currentVideo: { ...currentVideo, timestamp: newTime },
+                        },
+                      })
+                    );
+                  }
+                  await updatePlayingState(true);
+                  break;
+                }
                 break;
               case 2: // paused
                 await updatePlayingState(false);
@@ -302,6 +488,10 @@ export default function MusicRoom() {
               case 3: // buffering
                 break;
               case 5: // video cued
+                // Video is ready to play, start if we should be playing
+                if (isPlaying) {
+                  event.target.playVideo();
+                }
                 break;
             }
           },
@@ -320,39 +510,6 @@ export default function MusicRoom() {
       };
     }
   }, [roomId, userName]);
-
-  // Update timestamp periodically via WebSocket
-  useEffect(() => {
-    if (
-      roomId &&
-      currentVideo &&
-      isPlaying &&
-      playerRef.current &&
-      wsRef.current?.readyState === WebSocket.OPEN
-    ) {
-      const updateTimestamp = () => {
-        const currentTime = playerRef.current?.getCurrentTime?.();
-        if (currentTime !== undefined) {
-          try {
-            wsRef.current?.send(
-              JSON.stringify({
-                type: "updateTimestamp",
-                roomId,
-                state: {
-                  currentVideo: { ...currentVideo, timestamp: currentTime },
-                },
-              })
-            );
-          } catch (e) {
-            console.error("Failed to send timestamp:", e);
-          }
-        }
-      };
-
-      const interval = setInterval(updateTimestamp, 1000);
-      return () => clearInterval(interval);
-    }
-  }, [roomId, currentVideo, isPlaying]);
 
   // WebSocket connection to sync rooms across devices
   useEffect(() => {
@@ -439,17 +596,6 @@ export default function MusicRoom() {
             startSeconds: currentVideo.timestamp || 0,
           });
           return;
-        }
-
-        // Sync timestamp (only when video is playing)
-        if (isPlaying) {
-          const currentTime = playerRef.current.getCurrentTime?.();
-          if (
-            currentVideo.timestamp !== undefined &&
-            Math.abs(currentTime - currentVideo.timestamp) > 2
-          ) {
-            playerRef.current.seekTo?.(currentVideo.timestamp, true);
-          }
         }
 
         // Sync play/pause state
@@ -691,23 +837,28 @@ export default function MusicRoom() {
         // Optimistically update local state
         setQueue(updatedQueue);
 
-        // If no video is playing, start playing from queue
+        // If no video is playing, start playing the first item from the
+        // newly-updated queue. We avoid calling playNextInQueue() because
+        // it reads the (stale) `queue` state — instead use the freshly
+        // computed `updatedQueue` to deterministically start playback.
         if (!currentVideo) {
-          const nextVideo: QueueItem = updatedQueue[0];
-          await playVideo(nextVideo);
+          const nextVideo: QueueItem | undefined = updatedQueue[0];
+          if (nextVideo) {
+            await playVideo(nextVideo);
 
-          // Remove from queue after starting playback
-          const afterPlayQueue: QueueItem[] = updatedQueue.slice(1);
-          wsRef.current.send(
-            JSON.stringify({
-              type: "updateQueue",
-              roomId,
-              state: { queue: afterPlayQueue },
-            })
-          );
+            // Remove the played item from the queue and notify server
+            const afterPlayQueue: QueueItem[] = updatedQueue.slice(1);
+            wsRef.current.send(
+              JSON.stringify({
+                type: "updateQueue",
+                roomId,
+                state: { queue: afterPlayQueue },
+              })
+            );
 
-          // Optimistically update local queue
-          setQueue(afterPlayQueue);
+            // Optimistically update local queue
+            setQueue(afterPlayQueue);
+          }
         }
       }
     } catch (error) {
@@ -717,6 +868,8 @@ export default function MusicRoom() {
 
   const playVideo = async (video: SearchResult) => {
     if (!video || !roomId) return;
+
+    console.log("playVideo called for id:", video.id);
 
     try {
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
@@ -751,19 +904,81 @@ export default function MusicRoom() {
 
       // Initialize or update player
       if (!playerRef.current && playerReady) {
+        console.log("Initializing new player for:", video.id);
         initializePlayer(video.id);
-      } else if (playerRef.current && playerRef.current.loadVideoById) {
-        // Use timestamp from video object if it exists, otherwise start at 0
+      } else if (playerRef.current) {
         try {
+          console.log("Loading video in existing player:", video.id);
+          // Ensure the player is ready and has required methods
+          if (!playerRef.current.loadVideoById) {
+            console.error("Player missing loadVideoById, reinitializing");
+            playerRef.current.destroy?.();
+            playerRef.current = null;
+            initializePlayer(video.id);
+            return;
+          }
+
+          // Always use loadVideoById which will automatically start playing
           playerRef.current.loadVideoById({
             videoId: video.id,
-            startSeconds: Math.floor(video.timestamp || 0),
+            startSeconds: video.timestamp || 0,
           });
+
+          // Force play after a short delay to ensure video starts
           setTimeout(() => {
-            if (playerRef.current && playerRef.current.playVideo) {
-              playerRef.current.playVideo();
+            try {
+              if (playerRef.current) {
+                console.log("Forcing playback start");
+                playerRef.current.playVideo?.();
+              }
+            } catch (e) {
+              console.error("Error forcing playback:", e);
             }
-          }, 300);
+          }, 500);
+
+          // Double check to ensure video starts playing
+          const ensureVideoPlaying = () => {
+            if (playerRef.current) {
+              try {
+                const state = playerRef.current.getPlayerState?.();
+                console.log("Player state after load:", state);
+                if (state !== 1) {
+                  // 1 is playing
+                  console.log("Forcing playback start");
+                  playerRef.current.playVideo?.();
+                }
+              } catch (e) {
+                console.error("Error in ensureVideoPlaying:", e);
+              }
+            }
+          };
+
+          // Check multiple times to ensure playback starts
+          setTimeout(ensureVideoPlaying, 300);
+          setTimeout(ensureVideoPlaying, 1000);
+          setTimeout(ensureVideoPlaying, 2000);
+
+          // After a short delay, verify the iframe reports the expected video id.
+          setTimeout(() => {
+            try {
+              const reported = playerRef.current?.getVideoData?.()?.video_id;
+              console.log("Player reported video id after load:", reported);
+              if (!reported || reported === "" || reported !== video.id) {
+                console.error(
+                  "Player failed to load requested video, skipping to next. requested:",
+                  video.id,
+                  "reported:",
+                  reported
+                );
+                // Try to advance to next
+                playNextInQueue().catch((e) =>
+                  console.error("Error skipping after failed load:", e)
+                );
+              }
+            } catch (e) {
+              console.error("Error verifying loaded video id:", e);
+            }
+          }, 2500);
         } catch (error) {
           console.error("Error loading video in player:", error);
           toast.error("Failed to load video in player");
@@ -821,6 +1036,7 @@ export default function MusicRoom() {
       }
 
       if (!queue || queue.length === 0) {
+        console.log("Queue empty, stopping playback");
         // No more songs in queue
         wsRef.current.send(
           JSON.stringify({
@@ -841,8 +1057,15 @@ export default function MusicRoom() {
         setCurrentVideo(null);
         setIsPlaying(false);
 
+        // Ensure player is fully stopped
         if (playerRef.current) {
-          playerRef.current.stopVideo?.();
+          try {
+            playerRef.current.stopVideo?.();
+            // Clear any video ID to prevent auto-repeat
+            playerRef.current.loadVideoById?.({ videoId: "", startSeconds: 0 });
+          } catch (e) {
+            console.error("Error stopping video:", e);
+          }
         }
         return;
       }
