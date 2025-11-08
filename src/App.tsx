@@ -73,6 +73,16 @@ interface YouTubeApiItem {
   };
 }
 
+interface YouTubePlayerEvent {
+  target: {
+    playVideo: () => void;
+  };
+}
+
+interface YouTubeStateChangeEvent {
+  data: number;
+}
+
 interface SearchResult {
   id: string;
   title: string;
@@ -140,16 +150,31 @@ export default function MusicRoom() {
           rel: 0,
         },
         events: {
-          onReady: (event) => {
+          onReady: (event: YouTubePlayerEvent) => {
             console.log("Player ready");
             if (isPlaying) {
               event.target.playVideo();
             }
           },
-          onStateChange: async (event) => {
-            // When video ends, play next in queue
-            if (event.data === window.YT.PlayerState.ENDED) {
-              await playNextInQueue();
+          onStateChange: async (event: YouTubeStateChangeEvent) => {
+            console.log("Player state changed:", event.data);
+            // Handle all player state changes
+            switch (event.data) {
+              case -1: // unstarted
+                break;
+              case 0: // ended
+                await playNextInQueue();
+                break;
+              case 1: // playing
+                await updatePlayingState(true);
+                break;
+              case 2: // paused
+                await updatePlayingState(false);
+                break;
+              case 3: // buffering
+                break;
+              case 5: // video cued
+                break;
             }
           },
         },
@@ -182,11 +207,16 @@ export default function MusicRoom() {
       const updateTimestamp = async () => {
         const currentTime = playerRef.current?.getCurrentTime?.();
         if (currentTime !== undefined) {
-          const videoResult = await window.localStorage.getItem(`room:${roomId}:video`);
+          const videoResult = await window.localStorage.getItem(
+            `room:${roomId}:video`
+          );
           if (videoResult) {
             const videoData = JSON.parse(videoResult);
             const updatedVideo = { ...videoData, timestamp: currentTime };
-            await window.localStorage.setItem(`room:${roomId}:video`, JSON.stringify(updatedVideo));
+            await window.localStorage.setItem(
+              `room:${roomId}:video`,
+              JSON.stringify(updatedVideo)
+            );
           }
         }
       };
@@ -298,7 +328,9 @@ export default function MusicRoom() {
     return Math.random().toString(36).substring(2, 8).toUpperCase();
   };
 
-  const createRoom = async () => {
+  const createRoom = async (e: React.FormEvent) => {
+    e.preventDefault();
+
     if (!userName.trim()) {
       toast.error("Please enter your name");
       return;
@@ -330,7 +362,9 @@ export default function MusicRoom() {
     }
   };
 
-  const joinRoom = async () => {
+  const joinRoom = async (e: React.FormEvent) => {
+    e.preventDefault();
+
     if (!userName.trim() || !joinRoomId.trim()) {
       toast.error("Please enter your name and room ID");
       return;
@@ -566,19 +600,26 @@ export default function MusicRoom() {
     }
   };
 
-  const togglePlayPause = () => {
+  const togglePlayPause = async () => {
     if (!playerRef.current) return;
 
     try {
       if (isPlaying) {
+        // First update the state to ensure UI responsiveness
+        await updatePlayingState(false);
+        // Then pause the player
         playerRef.current.pauseVideo?.();
-        updatePlayingState(false);
       } else {
+        // First update the state to ensure UI responsiveness
+        await updatePlayingState(true);
+        // Then play the player
         playerRef.current.playVideo?.();
-        updatePlayingState(true);
       }
     } catch (error) {
       console.error("Error toggling play/pause:", error);
+      toast.error("Error controlling playback");
+      // Revert state if player control failed
+      await updatePlayingState(isPlaying);
     }
   };
 
@@ -680,37 +721,40 @@ export default function MusicRoom() {
             Create a Room
           </h2>
 
-          <div className="space-y-12">
-            <div>
-              <FieldSet>
-                <FieldGroup>
-                  <Field>
-                    <FieldLabel htmlFor="username">Your Name</FieldLabel>
-                    <Input
-                      id="username"
-                      type="text"
-                      placeholder="Enter your name"
-                      value={userName}
-                      onChange={(e) => setUserName(e.target.value)}
-                    />
-                  </Field>
-                </FieldGroup>
-              </FieldSet>
-            </div>
+          <form onSubmit={createRoom}>
+            <div className="space-y-12">
+              <div>
+                <FieldSet>
+                  <FieldGroup>
+                    <Field>
+                      <FieldLabel htmlFor="username">Your Name</FieldLabel>
+                      <Input
+                        id="username"
+                        type="text"
+                        placeholder="Enter your name"
+                        value={userName}
+                        onChange={(e) => setUserName(e.target.value)}
+                      />
+                    </Field>
+                  </FieldGroup>
+                </FieldSet>
+              </div>
 
-            <div className="flex justify-between">
-              <Button
-                onClick={() => setView("home")}
-                size="lg"
-                variant="outline"
-              >
-                Back
-              </Button>
-              <Button onClick={createRoom} size="lg">
-                Create Room
-              </Button>
+              <div className="flex justify-between">
+                <Button
+                  onClick={() => setView("home")}
+                  size="lg"
+                  variant="outline"
+                  type="button"
+                >
+                  Back
+                </Button>
+                <Button size="lg" type="submit">
+                  Create Room
+                </Button>
+              </div>
             </div>
-          </div>
+          </form>
         </div>
       </div>
     );
@@ -723,50 +767,53 @@ export default function MusicRoom() {
         <div className="bg-white rounded-3xl shadow-2xl p-8 max-w-md w-full">
           <h2 className="text-3xl font-bold mb-6 text-gray-800">Join a Room</h2>
 
-          <div className="space-y-12">
-            <div>
-              <FieldSet>
-                <FieldGroup>
-                  <Field>
-                    <FieldLabel htmlFor="username">Your Name</FieldLabel>
-                    <Input
-                      id="username"
-                      type="text"
-                      placeholder="Enter your name"
-                      value={userName}
-                      onChange={(e) => setUserName(e.target.value)}
-                    />
-                  </Field>
+          <form onSubmit={joinRoom}>
+            <div className="space-y-12">
+              <div>
+                <FieldSet>
+                  <FieldGroup>
+                    <Field>
+                      <FieldLabel htmlFor="username">Your Name</FieldLabel>
+                      <Input
+                        id="username"
+                        type="text"
+                        placeholder="Enter your name"
+                        value={userName}
+                        onChange={(e) => setUserName(e.target.value)}
+                      />
+                    </Field>
 
-                  <Field>
-                    <FieldLabel htmlFor="room-id">Room ID</FieldLabel>
-                    <Input
-                      id="room-id"
-                      type="text"
-                      placeholder="Enter room ID"
-                      value={joinRoomId}
-                      onChange={(e) =>
-                        setJoinRoomId(e.target.value.toUpperCase())
-                      }
-                    />
-                  </Field>
-                </FieldGroup>
-              </FieldSet>
-            </div>
+                    <Field>
+                      <FieldLabel htmlFor="room-id">Room ID</FieldLabel>
+                      <Input
+                        id="room-id"
+                        type="text"
+                        placeholder="Enter room ID"
+                        value={joinRoomId}
+                        onChange={(e) =>
+                          setJoinRoomId(e.target.value.toUpperCase())
+                        }
+                      />
+                    </Field>
+                  </FieldGroup>
+                </FieldSet>
+              </div>
 
-            <div className="flex justify-between">
-              <Button
-                onClick={() => setView("home")}
-                size="lg"
-                variant="outline"
-              >
-                Back
-              </Button>
-              <Button onClick={joinRoom} size="lg">
-                Join Room
-              </Button>
+              <div className="flex justify-between">
+                <Button
+                  onClick={() => setView("home")}
+                  size="lg"
+                  variant="outline"
+                  type="button"
+                >
+                  Back
+                </Button>
+                <Button size="lg" type="submit">
+                  Join Room
+                </Button>
+              </div>
             </div>
-          </div>
+          </form>
         </div>
       </div>
     );
