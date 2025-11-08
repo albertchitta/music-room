@@ -166,6 +166,36 @@ export default function MusicRoom() {
     }
   }, [roomId, view]);
 
+  // Handle user leaving the page
+  useEffect(() => {
+    if (roomId && userName) {
+      window.addEventListener("beforeunload", leaveRoom);
+      return () => {
+        window.removeEventListener("beforeunload", leaveRoom);
+      };
+    }
+  }, [roomId, userName]);
+
+  // Update timestamp periodically
+  useEffect(() => {
+    if (roomId && currentVideo && isPlaying && playerRef.current) {
+      const updateTimestamp = async () => {
+        const currentTime = playerRef.current?.getCurrentTime?.();
+        if (currentTime !== undefined) {
+          const videoResult = await window.localStorage.getItem(`room:${roomId}:video`);
+          if (videoResult) {
+            const videoData = JSON.parse(videoResult);
+            const updatedVideo = { ...videoData, timestamp: currentTime };
+            await window.localStorage.setItem(`room:${roomId}:video`, JSON.stringify(updatedVideo));
+          }
+        }
+      };
+
+      const interval = setInterval(updateTimestamp, 1000);
+      return () => clearInterval(interval);
+    }
+  }, [roomId, currentVideo, isPlaying]);
+
   // Sync player with room state
   useEffect(() => {
     if (playerRef.current && currentVideo && playerReady) {
@@ -390,18 +420,7 @@ export default function MusicRoom() {
   ): Promise<void> => {
     try {
       if (playNow) {
-        // Play immediately - add current video to front of queue if exists
-        if (currentVideo) {
-          const updatedQueue: QueueItem[] = [
-            { ...currentVideo, addedBy: userName, addedAt: Date.now() },
-            ...queue,
-          ];
-          await window.localStorage.setItem(
-            `room:${roomId}:queue`,
-            JSON.stringify(updatedQueue)
-          );
-          setQueue(updatedQueue);
-        }
+        // Play immediately
         await playVideo(video);
       } else {
         // Add to end of queue
@@ -580,18 +599,36 @@ export default function MusicRoom() {
     toast.success("Room ID copied to clipboard!");
   };
 
-  const leaveRoom = () => {
+  const leaveRoom = async () => {
     if (playerRef.current) {
       playerRef.current.destroy();
       playerRef.current = null;
     }
-    setView("home");
-    setRoomId("");
-    setCurrentVideo(null);
-    setIsPlaying(false);
-    setMembers([]);
-    setSearchResults([]);
-    setQueue([]);
+
+    try {
+      const membersResult = await window.localStorage.getItem(
+        `room:${roomId}:members`
+      );
+      const currentMembers = membersResult ? JSON.parse(membersResult) : [];
+      const updatedMembers = await currentMembers.filter(
+        (member: Member) => member.name !== userName
+      );
+
+      await window.localStorage.setItem(
+        `room:${roomId}:members`,
+        JSON.stringify(updatedMembers)
+      );
+
+      setView("home");
+      setRoomId("");
+      setCurrentVideo(null);
+      setIsPlaying(false);
+      setMembers(updatedMembers);
+      setSearchResults([]);
+      setQueue([]);
+    } catch (error) {
+      toast.error(`Error leaving room. Please try again. ${error}`);
+    }
   };
 
   // Home View
