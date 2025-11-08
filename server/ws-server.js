@@ -42,6 +42,8 @@ wss.on("connection", (ws) => {
     switch (type) {
       case "subscribe":
         room.clients.add(ws);
+        // associate this ws with the userName for cleanup on close
+        if (userName) ws.userName = userName;
         // add member if not exists
         if (userName) {
           const exists = room.state.members.find((m) => m.name === userName);
@@ -73,12 +75,39 @@ wss.on("connection", (ws) => {
         break;
 
       case "update":
-        // replace state with incoming state (merge minimal)
+        // merge incoming state with existing state to avoid clients wiping members
         if (state) {
-          room.state = { ...room.state, ...state };
-          // ensure members array exists
-          if (!Array.isArray(room.state.members)) room.state.members = [];
-          if (!Array.isArray(room.state.queue)) room.state.queue = [];
+          // merge members by name (union)
+          const incomingMembers = Array.isArray(state.members)
+            ? state.members
+            : [];
+          const existingMembers = Array.isArray(room.state.members)
+            ? room.state.members
+            : [];
+          const mergedMembersMap = new Map();
+          for (const m of existingMembers) mergedMembersMap.set(m.name, m);
+          for (const m of incomingMembers) mergedMembersMap.set(m.name, m);
+          const mergedMembers = Array.from(mergedMembersMap.values());
+
+          // queue: prefer incoming if provided, otherwise keep existing
+          const mergedQueue = Array.isArray(state.queue)
+            ? state.queue
+            : room.state.queue || [];
+
+          // currentVideo / playing: prefer incoming values when present
+          const mergedCurrentVideo =
+            state.currentVideo !== undefined
+              ? state.currentVideo
+              : room.state.currentVideo;
+          const mergedPlaying =
+            state.playing !== undefined ? state.playing : room.state.playing;
+
+          room.state = {
+            members: mergedMembers,
+            queue: mergedQueue,
+            currentVideo: mergedCurrentVideo,
+            playing: mergedPlaying,
+          };
         }
         // broadcast to all
         broadcast(roomId, { type: "room_state", roomId, state: room.state });
@@ -90,10 +119,24 @@ wss.on("connection", (ws) => {
   });
 
   ws.on("close", () => {
-    // remove from all rooms
+    // remove from all rooms and remove associated member (if any) then broadcast
     for (const [roomId, room] of rooms.entries()) {
       if (room.clients.has(ws)) {
         room.clients.delete(ws);
+        const name = ws.userName;
+        if (name) {
+          room.state.members = room.state.members.filter(
+            (m) => m.name !== name
+          );
+          broadcast(roomId, { type: "room_state", roomId, state: room.state });
+        }
+      }
+      // cleanup empty rooms
+      if (
+        room.clients.size === 0 &&
+        (!Array.isArray(room.state.members) || room.state.members.length === 0)
+      ) {
+        rooms.delete(roomId);
       }
     }
   });

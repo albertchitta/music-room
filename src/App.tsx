@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
   Music,
   Users,
@@ -117,6 +117,104 @@ export default function MusicRoom() {
   const [playerReady, setPlayerReady] = useState<boolean>(false);
   const wsRef = useRef<WebSocket | null>(null);
 
+  // Wait for a WebSocket to open (or timeout)
+  const waitForWsOpen = useCallback(
+    (socket: WebSocket | null, timeout: number = 4000): Promise<boolean> => {
+      return new Promise((resolve) => {
+        if (!socket) return resolve(false);
+        if (socket.readyState === WebSocket.OPEN) return resolve(true);
+
+        const onOpen = () => {
+          cleanup();
+          resolve(true);
+        };
+
+        const onClose = () => {
+          cleanup();
+          resolve(false);
+        };
+
+        const timer = setTimeout(() => {
+          cleanup();
+          resolve(false);
+        }, timeout);
+
+        function cleanup() {
+          try {
+            if (socket) {
+              // safe removal
+              (socket as WebSocket).removeEventListener("open", onOpen);
+              (socket as WebSocket).removeEventListener("close", onClose);
+            }
+          } catch {
+            /* ignore */
+          }
+          clearTimeout(timer);
+        }
+
+        socket.addEventListener("open", onOpen);
+        socket.addEventListener("close", onClose);
+      });
+    },
+    []
+  );
+
+  // Setup message handlers for a socket and subscribe to a room
+  const attachSocketHandlers = useCallback(
+    (
+      socket: WebSocket,
+      subscribeRoomId?: string,
+      subscribeUserName?: string
+    ) => {
+      try {
+        socket.onopen = () => {
+          try {
+            if (subscribeRoomId) {
+              socket.send(
+                JSON.stringify({
+                  type: "subscribe",
+                  roomId: subscribeRoomId,
+                  userName: subscribeUserName,
+                })
+              );
+            } else if (roomId) {
+              socket.send(
+                JSON.stringify({ type: "subscribe", roomId, userName })
+              );
+            }
+          } catch (e) {
+            console.error("WS send error on open:", e);
+          }
+        };
+
+        socket.onmessage = (evt) => {
+          try {
+            const msg = JSON.parse(evt.data);
+            if (
+              msg?.type === "room_state" &&
+              msg.roomId === (subscribeRoomId || roomId)
+            ) {
+              const s = msg.state || {};
+              setMembers(s.members || []);
+              setQueue(s.queue || []);
+              setCurrentVideo(s.currentVideo || null);
+              setIsPlaying(!!s.playing);
+            }
+          } catch (e) {
+            console.error("WS message parse error:", e);
+          }
+        };
+
+        socket.onclose = () => {
+          if (wsRef.current === socket) wsRef.current = null;
+        };
+      } catch (e) {
+        console.error("Error attaching socket handlers", e);
+      }
+    },
+    [roomId, userName]
+  );
+
   const broadcastRoomState = () => {
     try {
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
@@ -199,6 +297,8 @@ export default function MusicRoom() {
   };
 
   // Load room data from storage
+  // Load room data from storage
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (roomId && view === "room") {
       loadRoomData();
@@ -208,6 +308,8 @@ export default function MusicRoom() {
   }, [roomId, view]);
 
   // Handle user leaving the page
+  // Handle user leaving the page
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (roomId && userName) {
       window.addEventListener("beforeunload", leaveRoom);
@@ -247,6 +349,26 @@ export default function MusicRoom() {
     if (roomId && view === "room") {
       const wsUrl =
         (import.meta.env.VITE_WS_URL as string) || "ws://localhost:3001";
+
+      // If a socket already exists (for example created during join flow), reuse it
+      if (wsRef.current) {
+        // Ensure subscription is sent for this room
+        try {
+          if (wsRef.current.readyState === WebSocket.OPEN) {
+            wsRef.current.send(
+              JSON.stringify({ type: "subscribe", roomId, userName })
+            );
+          } else {
+            // Attach handlers in case it was created externally
+            attachSocketHandlers(wsRef.current, roomId, userName);
+          }
+        } catch (e) {
+          console.error("WS reuse error:", e);
+        }
+        return;
+      }
+
+      // Otherwise create a new WebSocket
       try {
         wsRef.current = new WebSocket(wsUrl);
       } catch (e) {
@@ -254,34 +376,7 @@ export default function MusicRoom() {
         return;
       }
 
-      wsRef.current.onopen = () => {
-        try {
-          wsRef.current?.send(
-            JSON.stringify({ type: "subscribe", roomId, userName })
-          );
-        } catch (e) {
-          console.error("WS send error:", e);
-        }
-      };
-
-      wsRef.current.onmessage = (evt) => {
-        try {
-          const msg = JSON.parse(evt.data);
-          if (msg?.type === "room_state" && msg.roomId === roomId) {
-            const s = msg.state || {};
-            setMembers(s.members || []);
-            setQueue(s.queue || []);
-            setCurrentVideo(s.currentVideo || null);
-            setIsPlaying(!!s.playing);
-          }
-        } catch (e) {
-          console.error("WS message parse error:", e);
-        }
-      };
-
-      wsRef.current.onclose = () => {
-        wsRef.current = null;
-      };
+      attachSocketHandlers(wsRef.current, roomId, userName);
 
       return () => {
         if (wsRef.current) {
@@ -297,7 +392,7 @@ export default function MusicRoom() {
         }
       };
     }
-  }, [roomId, view, userName]);
+  }, [roomId, view, userName, attachSocketHandlers]);
 
   // Sync player with room state
   useEffect(() => {
@@ -430,8 +525,20 @@ export default function MusicRoom() {
       setMembers(initialMembers);
       setQueue([]);
       setView("room");
-      // broadcast initial state to other devices (if connected)
-      setTimeout(() => broadcastRoomState(), 300);
+      // wait for websocket to be ready (if available) and broadcast initial state
+      try {
+        // wait a short time for the effect that creates the ws to run
+        const ok = await waitForWsOpen(wsRef.current, 3000);
+        if (ok) {
+          broadcastRoomState();
+        } else {
+          // if not connected, we'll still persist to localStorage and rely on
+          // other devices to create rooms via the server when they subscribe
+          setTimeout(() => broadcastRoomState(), 500);
+        }
+      } catch {
+        // ignore and continue
+      }
     } catch (error) {
       toast.error(`Error creating room. Please try again. ${error}`);
     }
@@ -446,32 +553,93 @@ export default function MusicRoom() {
     }
 
     try {
-      const membersResult = await window.localStorage.getItem(
-        `room:${joinRoomId}:members`
-      );
+      const wsUrl =
+        (import.meta.env.VITE_WS_URL as string) || "ws://localhost:3001";
 
-      if (!membersResult) {
+      // open a temporary socket to ask the server for the room state
+      const temp = new WebSocket(wsUrl);
+
+      type RoomStateServer = {
+        members?: Member[];
+        queue?: QueueItem[];
+        currentVideo?: QueueItem | null;
+        playing?: boolean;
+      };
+
+      const roomState = await new Promise<RoomStateServer | null>((resolve) => {
+        const timer = setTimeout(() => {
+          cleanup();
+          resolve(null);
+        }, 5000);
+
+        function cleanup() {
+          clearTimeout(timer);
+          try {
+            temp.removeEventListener("open", onOpen);
+            temp.removeEventListener("message", onMessage);
+            temp.removeEventListener("close", onClose);
+          } catch {
+            /* ignore */
+          }
+        }
+
+        function onOpen() {
+          try {
+            temp.send(
+              JSON.stringify({
+                type: "subscribe",
+                roomId: joinRoomId,
+                userName,
+              })
+            );
+          } catch {
+            /* ignore */
+          }
+        }
+
+        function onMessage(evt: MessageEvent) {
+          try {
+            const msg = JSON.parse(evt.data);
+            if (msg?.type === "room_state" && msg.roomId === joinRoomId) {
+              cleanup();
+              resolve(msg.state || {});
+            }
+          } catch {
+            // ignore parse errors
+          }
+        }
+
+        function onClose() {
+          cleanup();
+          resolve(null);
+        }
+
+        temp.addEventListener("open", onOpen);
+        temp.addEventListener("message", onMessage);
+        temp.addEventListener("close", onClose);
+      });
+
+      if (!roomState) {
+        try {
+          temp.close();
+        } catch {
+          /* ignore */
+        }
         toast.error("Room not found. Please check the room ID.");
         return;
       }
 
-      const currentMembers = JSON.parse(membersResult);
-      const updatedMembers = [
-        ...currentMembers,
-        { name: userName, joinedAt: Date.now() },
-      ];
+      // reuse this socket as the persistent connection
+      wsRef.current = temp;
+      attachSocketHandlers(temp, joinRoomId, userName);
 
-      await window.localStorage.setItem(
-        `room:${joinRoomId}:members`,
-        JSON.stringify(updatedMembers)
-      );
-
+      // set local state from server-provided state and enter room
       setRoomId(joinRoomId);
-      setMembers(updatedMembers);
+      setMembers(roomState.members || []);
+      setQueue(roomState.queue || []);
+      setCurrentVideo(roomState.currentVideo || null);
+      setIsPlaying(!!roomState.playing);
       setView("room");
-      loadRoomData();
-      // send current state to server so other devices can sync
-      setTimeout(() => broadcastRoomState(), 300);
     } catch (error) {
       toast.error(`Error joining room. Please try again. ${error}`);
     }
