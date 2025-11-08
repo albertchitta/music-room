@@ -17,40 +17,145 @@ import { Button } from "./components/ui/button";
 import { Field, FieldGroup, FieldLabel, FieldSet } from "./components/ui/field";
 import { Input } from "./components/ui/input";
 import { ButtonGroup } from "./components/ui/button-group";
+import { toast } from "sonner";
 
-// Add your YouTube API key here or use environment variable
-const YOUTUBE_API_KEY =
-  import.meta.env.VITE_YOUTUBE_API_KEY || "YOUR_API_KEY_HERE";
+declare global {
+  interface Window {
+    YT: {
+      Player: new (
+        elementId: string,
+        config: {
+          height: string;
+          width: string;
+          videoId: string;
+          playerVars?: Record<string, unknown>;
+          events?: Record<string, unknown>;
+        }
+      ) => {
+        destroy: () => void;
+        playVideo: () => void;
+        pauseVideo: () => void;
+        loadVideoById: (params: {
+          videoId: string;
+          startSeconds: number;
+        }) => void;
+        getVideoData: () => { video_id: string };
+        getCurrentTime: () => number;
+        seekTo: (seconds: number, allowSeekAhead: boolean) => void;
+        getPlayerState: () => number;
+        stopVideo: () => void;
+      };
+      PlayerState: {
+        ENDED: number;
+      };
+    };
+    onYouTubeIframeAPIReady: () => void;
+  }
+}
 
-export default function YouTubeMusicRoom() {
-  const [view, setView] = useState("home");
-  const [roomId, setRoomId] = useState("");
-  const [userName, setUserName] = useState("");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState([]);
-  const [currentVideo, setCurrentVideo] = useState(null);
-  const [queue, setQueue] = useState([]);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [members, setMembers] = useState([]);
-  const [joinRoomId, setJoinRoomId] = useState("");
-  const [isSearching, setIsSearching] = useState(false);
-  const [showQueue, setShowQueue] = useState(false);
-  const playerRef = useRef(null);
-  const [playerReady, setPlayerReady] = useState(false);
+interface Member {
+  name: string;
+  joinedAt: number;
+}
 
-  // Initialize YouTube Player API
+interface YouTubeApiItem {
+  id: {
+    videoId: string;
+  };
+  snippet: {
+    title: string;
+    thumbnails: {
+      medium: {
+        url: string;
+      };
+    };
+    channelTitle: string;
+  };
+}
+
+interface SearchResult {
+  id: string;
+  title: string;
+  thumbnail: string;
+  channel: string;
+}
+
+interface QueueItem extends SearchResult {
+  addedBy?: string;
+  addedAt?: number;
+  timestamp?: number;
+}
+
+export default function MusicRoom() {
+  // Add your YouTube API key here or use environment variable
+  const YOUTUBE_API_KEY =
+    import.meta.env.VITE_YOUTUBE_API_KEY || "YOUR_API_KEY_HERE";
+
+  const [view, setView] = useState<string>("home");
+  const [roomId, setRoomId] = useState<string>("");
+  const [userName, setUserName] = useState<string>("");
+  const [searchQuery, setSearchQuery] = useState<string>("");
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [currentVideo, setCurrentVideo] = useState<QueueItem | null>(null);
+  const [queue, setQueue] = useState<QueueItem[]>([]);
+  const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const [members, setMembers] = useState<Member[]>([]);
+  const [joinRoomId, setJoinRoomId] = useState<string>("");
+  const [isSearching, setIsSearching] = useState<boolean>(false);
+  const [showQueue, setShowQueue] = useState<boolean>(false);
+  const playerRef = useRef<InstanceType<typeof window.YT.Player>>(null);
+  const [playerReady, setPlayerReady] = useState<boolean>(false);
+
+  // Loads the IFrame API code asynchronously.
   useEffect(() => {
     if (!window.YT) {
       const tag = document.createElement("script");
       tag.src = "https://www.youtube.com/iframe_api";
       const firstScriptTag = document.getElementsByTagName("script")[0];
-      firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+      firstScriptTag.parentNode?.insertBefore(tag, firstScriptTag);
     }
 
     window.onYouTubeIframeAPIReady = () => {
       setPlayerReady(true);
     };
   }, []);
+
+  // Creates an <iframe> (and YouTube player) after the API code downloads.
+  const initializePlayer = (videoId: string) => {
+    if (window.YT && window.YT.Player && !playerRef.current) {
+      const container = document.getElementById("youtube-player");
+      if (!container) {
+        console.log("Player container not found");
+        return;
+      }
+
+      playerRef.current = new window.YT.Player("youtube-player", {
+        height: "100%",
+        width: "100%",
+        videoId: videoId,
+        playerVars: {
+          autoplay: 1,
+          controls: 1,
+          modestbranding: 1,
+          rel: 0,
+        },
+        events: {
+          onReady: (event) => {
+            console.log("Player ready");
+            if (isPlaying) {
+              event.target.playVideo();
+            }
+          },
+          onStateChange: async (event) => {
+            // When video ends, play next in queue
+            if (event.data === window.YT.PlayerState.ENDED) {
+              await playNextInQueue();
+            }
+          },
+        },
+      });
+    }
+  };
 
   // Load room data from storage
   useEffect(() => {
@@ -68,7 +173,22 @@ export default function YouTubeMusicRoom() {
 
       // Load new video if different
       if (currentVideoId !== currentVideo.id) {
-        playerRef.current.loadVideoById(currentVideo.id);
+        playerRef.current.loadVideoById({
+          videoId: currentVideo.id,
+          startSeconds: currentVideo.timestamp || 0,
+        });
+        return;
+      }
+
+      // Sync timestamp (only when video is playing)
+      if (isPlaying) {
+        const currentTime = playerRef.current.getCurrentTime?.();
+        if (
+          currentVideo.timestamp !== undefined &&
+          Math.abs(currentTime - currentVideo.timestamp) > 2
+        ) {
+          playerRef.current.seekTo?.(currentVideo.timestamp, true);
+        }
       }
 
       // Sync play/pause state
@@ -91,20 +211,16 @@ export default function YouTubeMusicRoom() {
   const loadRoomData = async () => {
     try {
       const videoResult = await window.localStorage.getItem(
-        `room:${roomId}:video`,
-        true
+        `room:${roomId}:video`
       );
       const queueResult = await window.localStorage.getItem(
-        `room:${roomId}:queue`,
-        true
+        `room:${roomId}:queue`
       );
       const membersResult = await window.localStorage.getItem(
-        `room:${roomId}:members`,
-        true
+        `room:${roomId}:members`
       );
       const playingResult = await window.localStorage.getItem(
-        `room:${roomId}:playing`,
-        true
+        `room:${roomId}:playing`
       );
 
       if (videoResult && videoResult) {
@@ -148,49 +264,13 @@ export default function YouTubeMusicRoom() {
     }
   };
 
-  const initializePlayer = (videoId) => {
-    if (window.YT && window.YT.Player && !playerRef.current) {
-      const container = document.getElementById("youtube-player");
-      if (!container) {
-        console.log("Player container not found");
-        return;
-      }
-
-      playerRef.current = new window.YT.Player("youtube-player", {
-        height: "100%",
-        width: "100%",
-        videoId: videoId,
-        playerVars: {
-          autoplay: 1,
-          controls: 1,
-          modestbranding: 1,
-          rel: 0,
-        },
-        events: {
-          onReady: (event) => {
-            console.log("Player ready");
-            if (isPlaying) {
-              event.target.playVideo();
-            }
-          },
-          onStateChange: async (event) => {
-            // When video ends, play next in queue
-            if (event.data === window.YT.PlayerState.ENDED) {
-              await playNextInQueue();
-            }
-          },
-        },
-      });
-    }
-  };
-
   const generateRoomId = () => {
     return Math.random().toString(36).substring(2, 8).toUpperCase();
   };
 
   const createRoom = async () => {
     if (!userName.trim()) {
-      alert("Please enter your name");
+      toast.error("Please enter your name");
       return;
     }
 
@@ -200,18 +280,15 @@ export default function YouTubeMusicRoom() {
     try {
       await window.localStorage.setItem(
         `room:${newRoomId}:members`,
-        JSON.stringify(initialMembers),
-        true
+        JSON.stringify(initialMembers)
       );
       await window.localStorage.setItem(
         `room:${newRoomId}:playing`,
-        JSON.stringify(false),
-        true
+        JSON.stringify(false)
       );
       await window.localStorage.setItem(
         `room:${newRoomId}:queue`,
-        JSON.stringify([]),
-        true
+        JSON.stringify([])
       );
 
       setRoomId(newRoomId);
@@ -219,24 +296,23 @@ export default function YouTubeMusicRoom() {
       setQueue([]);
       setView("room");
     } catch (error) {
-      alert("Error creating room. Please try again.");
+      toast.error(`Error creating room. Please try again. ${error}`);
     }
   };
 
   const joinRoom = async () => {
     if (!userName.trim() || !joinRoomId.trim()) {
-      alert("Please enter your name and room ID");
+      toast.error("Please enter your name and room ID");
       return;
     }
 
     try {
       const membersResult = await window.localStorage.getItem(
-        `room:${joinRoomId}:members`,
-        true
+        `room:${joinRoomId}:members`
       );
 
       if (!membersResult) {
-        alert("Room not found. Please check the room ID.");
+        toast.error("Room not found. Please check the room ID.");
         return;
       }
 
@@ -248,8 +324,7 @@ export default function YouTubeMusicRoom() {
 
       await window.localStorage.setItem(
         `room:${joinRoomId}:members`,
-        JSON.stringify(updatedMembers),
-        true
+        JSON.stringify(updatedMembers)
       );
 
       setRoomId(joinRoomId);
@@ -257,13 +332,13 @@ export default function YouTubeMusicRoom() {
       setView("room");
       loadRoomData();
     } catch (error) {
-      alert("Error joining room. Please try again.");
+      toast.error(`Error joining room. Please try again. ${error}`);
     }
   };
 
   const searchYouTube = async () => {
     if (!searchQuery.trim()) {
-      alert("Please enter a search query");
+      toast.error("Please enter a search query");
       return;
     }
 
@@ -286,86 +361,87 @@ export default function YouTubeMusicRoom() {
       const data = await response.json();
 
       if (!data.items || data.items.length === 0) {
-        alert("No results found. Try a different search term.");
+        toast.error("No results found. Try a different search term.");
         setIsSearching(false);
         return;
       }
 
-      const results = data.items.map((item) => ({
-        id: item.id.videoId,
-        title: item.snippet.title,
-        thumbnail: item.snippet.thumbnails.medium.url,
-        channel: item.snippet.channelTitle,
-      }));
+      const results: SearchResult[] = data.items.map(
+        (item: YouTubeApiItem) => ({
+          id: item.id.videoId,
+          title: item.snippet.title,
+          thumbnail: item.snippet.thumbnails.medium.url,
+          channel: item.snippet.channelTitle,
+        })
+      );
 
       setSearchResults(results);
     } catch (error) {
       console.error("Search error:", error);
-      alert(`Error searching YouTube: ${error.message}`);
+      toast.error(`Error searching YouTube: ${error}`);
     } finally {
       setIsSearching(false);
     }
   };
 
-  const addToQueue = async (video, playNow = false) => {
+  const addToQueue = async (
+    video: SearchResult,
+    playNow: boolean = false
+  ): Promise<void> => {
     try {
       if (playNow) {
         // Play immediately - add current video to front of queue if exists
         if (currentVideo) {
-          const updatedQueue = [
+          const updatedQueue: QueueItem[] = [
             { ...currentVideo, addedBy: userName, addedAt: Date.now() },
             ...queue,
           ];
           await window.localStorage.setItem(
             `room:${roomId}:queue`,
-            JSON.stringify(updatedQueue),
-            true
+            JSON.stringify(updatedQueue)
           );
           setQueue(updatedQueue);
         }
         await playVideo(video);
       } else {
         // Add to end of queue
-        const updatedQueue = [
+        const updatedQueue: QueueItem[] = [
           ...queue,
           { ...video, addedBy: userName, addedAt: Date.now() },
         ];
         await window.localStorage.setItem(
           `room:${roomId}:queue`,
-          JSON.stringify(updatedQueue),
-          true
+          JSON.stringify(updatedQueue)
         );
         setQueue(updatedQueue);
 
         // If no video is playing, start playing from queue
         if (!currentVideo) {
-          const nextVideo = updatedQueue[0];
+          const nextVideo: QueueItem = updatedQueue[0];
           await playVideo(nextVideo);
           // Remove from queue after starting playback
-          const afterPlayQueue = updatedQueue.slice(1);
+          const afterPlayQueue: QueueItem[] = updatedQueue.slice(1);
           await window.localStorage.setItem(
             `room:${roomId}:queue`,
-            JSON.stringify(afterPlayQueue),
-            true
+            JSON.stringify(afterPlayQueue)
           );
           setQueue(afterPlayQueue);
         }
       }
     } catch (error) {
-      alert("Error adding to queue");
+      toast.error(`Error adding to queue: ${error}`);
     }
   };
 
-  const playVideo = async (video) => {
+  const playVideo = async (video: SearchResult) => {
     if (!video || !roomId) return;
 
     try {
       await window.localStorage.setItem(
         `room:${roomId}:video`,
-        JSON.stringify(video),
-        true
+        JSON.stringify(video)
       );
-      await window.localStorage.setItem(`room:${roomId}:playing`, "true", true);
+      await window.localStorage.setItem(`room:${roomId}:playing`, "true");
 
       setCurrentVideo(video);
       setIsPlaying(true);
@@ -378,8 +454,12 @@ export default function YouTubeMusicRoom() {
       if (!playerRef.current && playerReady) {
         initializePlayer(video.id);
       } else if (playerRef.current && playerRef.current.loadVideoById) {
+        const currentTime = playerRef.current.getCurrentTime?.();
         try {
-          playerRef.current.loadVideoById(video.id);
+          playerRef.current.loadVideoById({
+            videoId: video.id,
+            startSeconds: Math.floor(currentTime || 0),
+          });
           setTimeout(() => {
             if (playerRef.current && playerRef.current.playVideo) {
               playerRef.current.playVideo();
@@ -391,21 +471,20 @@ export default function YouTubeMusicRoom() {
       }
     } catch (error) {
       console.error("Error playing video:", error);
-      alert("Error playing video");
+      toast.error(`Error playing video: ${error}`);
     }
   };
 
-  const removeFromQueue = async (index) => {
+  const removeFromQueue = async (index: number) => {
     try {
       const updatedQueue = queue.filter((_, i) => i !== index);
       await window.localStorage.setItem(
         `room:${roomId}:queue`,
-        JSON.stringify(updatedQueue),
-        true
+        JSON.stringify(updatedQueue)
       );
       setQueue(updatedQueue);
     } catch (error) {
-      alert("Error removing from queue");
+      toast.error(`Error removing from queue: ${error}`);
     }
   };
 
@@ -416,7 +495,7 @@ export default function YouTubeMusicRoom() {
       await playNextInQueue();
     } catch (error) {
       console.error("Error skipping:", error);
-      alert("Error skipping to next song");
+      toast.error(`Error skipping to next song: ${error}`);
     }
   };
 
@@ -424,8 +503,7 @@ export default function YouTubeMusicRoom() {
     try {
       // Load latest queue from storage
       const queueResult = await window.localStorage.getItem(
-        `room:${roomId}:queue`,
-        true
+        `room:${roomId}:queue`
       );
       let currentQueue = [];
 
@@ -440,12 +518,8 @@ export default function YouTubeMusicRoom() {
 
       if (!currentQueue || currentQueue.length === 0) {
         // No more songs in queue
-        await window.localStorage.setItem(`room:${roomId}:video`, "null", true);
-        await window.localStorage.setItem(
-          `room:${roomId}:playing`,
-          "false",
-          true
-        );
+        await window.localStorage.setItem(`room:${roomId}:video`, "null");
+        await window.localStorage.setItem(`room:${roomId}:playing`, "false");
         setCurrentVideo(null);
         setIsPlaying(false);
 
@@ -465,8 +539,7 @@ export default function YouTubeMusicRoom() {
       const updatedQueue = currentQueue.slice(1);
       await window.localStorage.setItem(
         `room:${roomId}:queue`,
-        JSON.stringify(updatedQueue),
-        true
+        JSON.stringify(updatedQueue)
       );
       setQueue(updatedQueue);
     } catch (error) {
@@ -490,22 +563,21 @@ export default function YouTubeMusicRoom() {
     }
   };
 
-  const updatePlayingState = async (playing) => {
+  const updatePlayingState = async (playing: boolean) => {
     try {
       await window.localStorage.setItem(
         `room:${roomId}:playing`,
-        JSON.stringify(playing),
-        true
+        JSON.stringify(playing)
       );
       setIsPlaying(playing);
     } catch (error) {
-      console.error("Error updating playback state");
+      console.error("Error updating playback state:", error);
     }
   };
 
   const copyRoomId = () => {
     navigator.clipboard.writeText(roomId);
-    alert("Room ID copied to clipboard!");
+    toast.success("Room ID copied to clipboard!");
   };
 
   const leaveRoom = () => {
@@ -802,7 +874,7 @@ export default function YouTubeMusicRoom() {
                       <img
                         src={result.thumbnail}
                         alt={result.title}
-                        className="w-32 h-20 object-cover rounded flex-shrink-0"
+                        className="w-32 h-20 object-cover rounded shrink-0"
                       />
                       <div className="flex-1 min-w-0">
                         <h4 className="font-semibold text-gray-800 truncate">
@@ -812,7 +884,7 @@ export default function YouTubeMusicRoom() {
                           {result.channel}
                         </p>
                       </div>
-                      <div className="flex flex-col gap-2 flex-shrink-0">
+                      <div className="flex flex-col gap-2 shrink-0">
                         <button
                           onClick={() => addToQueue(result, true)}
                           className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition flex items-center gap-2 text-sm"
@@ -857,7 +929,7 @@ export default function YouTubeMusicRoom() {
                           <img
                             src={song.thumbnail}
                             alt={song.title}
-                            className="w-16 h-12 object-cover rounded flex-shrink-0"
+                            className="w-16 h-12 object-cover rounded shrink-0"
                           />
                           <div className="flex-1 min-w-0">
                             <h4 className="font-semibold text-sm text-gray-800 truncate">
@@ -869,7 +941,7 @@ export default function YouTubeMusicRoom() {
                           </div>
                           <button
                             onClick={() => removeFromQueue(index)}
-                            className="text-red-600 hover:text-red-700 flex-shrink-0"
+                            className="text-red-600 hover:text-red-700 shrink-0"
                           >
                             <X className="w-5 h-5" />
                           </button>
