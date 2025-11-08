@@ -3,7 +3,16 @@ import { WebSocketServer } from "ws";
 const PORT = process.env.PORT || 3001;
 const wss = new WebSocketServer({ port: PORT });
 
-// rooms: Map roomId -> {clients: Set(ws), state: {members, currentVideo, queue, playing}}
+// Room state types:
+// rooms: Map roomId -> {
+//   clients: Set(ws),
+//   state: {
+//     members: Array<{name: string, joinedAt: number}>,
+//     currentVideo: {id: string, title: string, thumbnail: string, channel: string, timestamp?: number} | null,
+//     queue: Array<{id: string, title: string, thumbnail: string, channel: string, addedBy?: string, addedAt?: number}>,
+//     playing: boolean
+//   }
+// }
 const rooms = new Map();
 
 function broadcast(roomId, message, exclude) {
@@ -14,6 +23,12 @@ function broadcast(roomId, message, exclude) {
     if (ws.readyState === ws.OPEN && ws !== exclude) {
       ws.send(data);
     }
+  }
+  // Log state changes for debugging
+  if (message.type === "room_state") {
+    console.log(
+      `[broadcast] room=${roomId} members=${message.state.members.length} playing=${message.state.playing}`
+    );
   }
 }
 
@@ -74,43 +89,35 @@ wss.on("connection", (ws) => {
         broadcast(roomId, { type: "room_state", roomId, state: room.state });
         break;
 
-      case "update":
-        // merge incoming state with existing state to avoid clients wiping members
-        if (state) {
-          // merge members by name (union)
-          const incomingMembers = Array.isArray(state.members)
-            ? state.members
-            : [];
-          const existingMembers = Array.isArray(room.state.members)
-            ? room.state.members
-            : [];
-          const mergedMembersMap = new Map();
-          for (const m of existingMembers) mergedMembersMap.set(m.name, m);
-          for (const m of incomingMembers) mergedMembersMap.set(m.name, m);
-          const mergedMembers = Array.from(mergedMembersMap.values());
-
-          // queue: prefer incoming if provided, otherwise keep existing
-          const mergedQueue = Array.isArray(state.queue)
-            ? state.queue
-            : room.state.queue || [];
-
-          // currentVideo / playing: prefer incoming values when present
-          const mergedCurrentVideo =
-            state.currentVideo !== undefined
-              ? state.currentVideo
-              : room.state.currentVideo;
-          const mergedPlaying =
-            state.playing !== undefined ? state.playing : room.state.playing;
-
-          room.state = {
-            members: mergedMembers,
-            queue: mergedQueue,
-            currentVideo: mergedCurrentVideo,
-            playing: mergedPlaying,
-          };
+      case "updateTimestamp":
+        if (
+          state?.currentVideo?.timestamp !== undefined &&
+          room.state.currentVideo
+        ) {
+          room.state.currentVideo.timestamp = state.currentVideo.timestamp;
+          // Don't broadcast timestamp updates to reduce network traffic
         }
-        // broadcast to all
-        broadcast(roomId, { type: "room_state", roomId, state: room.state });
+        break;
+
+      case "updatePlaying":
+        if (state?.playing !== undefined) {
+          room.state.playing = state.playing;
+          broadcast(roomId, { type: "room_state", roomId, state: room.state });
+        }
+        break;
+
+      case "updateVideo":
+        if (state?.currentVideo !== undefined) {
+          room.state.currentVideo = state.currentVideo;
+          broadcast(roomId, { type: "room_state", roomId, state: room.state });
+        }
+        break;
+
+      case "updateQueue":
+        if (Array.isArray(state?.queue)) {
+          room.state.queue = state.queue;
+          broadcast(roomId, { type: "room_state", roomId, state: room.state });
+        }
         break;
 
       default:

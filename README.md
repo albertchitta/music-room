@@ -72,20 +72,30 @@ export default defineConfig([
 ]);
 ```
 
-## Realtime WebSocket server (rooms across devices)
+## WebSocket Server Architecture
 
-This project includes a minimal WebSocket relay server that lets multiple clients share room state (members, queue, current video, playing) across browsers and devices.
+This project uses a WebSocket server as the single source of truth for room state, enabling real-time synchronization across devices. The server manages rooms in memory and handles all state updates (members, queue, current video, playing status).
 
 Files:
 
-- `server/ws-server.js` — the Node `ws` server implementation (in-memory rooms)
-- `server/package.json` — minimal package.json for the server
-- `server/Dockerfile` — Dockerfile to build the server image (for Cloud Run / containers)
-- `Procfile` — for Heroku deployment
+- `server/ws-server.js` — Node.js WebSocket server (in-memory room state)
+- `server/package.json` — Server dependencies
+- `server/Dockerfile` — Container image build
+- `Procfile` — Heroku deployment
 
-Environment / client config:
+Server Features:
 
-- The frontend connects to the server URL from `VITE_WS_URL` (set in `.env`), defaulting to `ws://localhost:3001` for local development.
+- Maintains authoritative room state
+- Handles member presence/cleanup
+- Manages video playback sync
+- Supports queue operations
+- Real-time state broadcast
+
+Environment Setup:
+
+- Frontend connects via `VITE_WS_URL` (in `.env`)
+- Default local URL: `ws://localhost:3001`
+- Use `wss://` for secure production deploys
 
 Local development
 

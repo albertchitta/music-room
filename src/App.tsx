@@ -76,6 +76,8 @@ interface YouTubeApiItem {
 interface YouTubePlayerEvent {
   target: {
     playVideo: () => void;
+    pauseVideo: () => void;
+    seekTo: (seconds: number, allowSeekAhead: boolean) => void;
   };
 }
 
@@ -88,6 +90,7 @@ interface SearchResult {
   title: string;
   thumbnail: string;
   channel: string;
+  timestamp?: number; // Optional timestamp for video position
 }
 
 interface QueueItem extends SearchResult {
@@ -215,21 +218,6 @@ export default function MusicRoom() {
     [roomId, userName]
   );
 
-  const broadcastRoomState = () => {
-    try {
-      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-      const state = {
-        members,
-        currentVideo,
-        queue,
-        playing: isPlaying,
-      };
-      wsRef.current.send(JSON.stringify({ type: "update", roomId, state }));
-    } catch (e) {
-      console.error("Error broadcasting room state", e);
-    }
-  };
-
   // Loads the IFrame API code asynchronously.
   useEffect(() => {
     if (!window.YT) {
@@ -245,13 +233,26 @@ export default function MusicRoom() {
   }, []);
 
   // Creates an <iframe> (and YouTube player) after the API code downloads.
-  const initializePlayer = (videoId: string) => {
-    if (window.YT && window.YT.Player && !playerRef.current) {
+  const initializePlayer = useCallback(
+    (videoId: string) => {
+      if (!window.YT || !window.YT.Player) {
+        console.log("YouTube API not ready");
+        return;
+      }
+
+      if (playerRef.current) {
+        console.log("Player already exists");
+        return;
+      }
+
       const container = document.getElementById("youtube-player");
       if (!container) {
         console.log("Player container not found");
         return;
       }
+
+      // Clear any existing content in case there's a stale iframe
+      container.innerHTML = "";
 
       playerRef.current = new window.YT.Player("youtube-player", {
         height: "100%",
@@ -265,9 +266,22 @@ export default function MusicRoom() {
         },
         events: {
           onReady: (event: YouTubePlayerEvent) => {
-            console.log("Player ready");
-            if (isPlaying) {
-              event.target.playVideo();
+            console.log("Player ready - initializing state");
+            // Initialize with current state
+            try {
+              // Ensure currentVideo exists before using it
+              if (currentVideo?.timestamp) {
+                event.target.seekTo(currentVideo.timestamp, true);
+              }
+              if (isPlaying) {
+                event.target.playVideo();
+              } else {
+                event.target.pauseVideo();
+              }
+              // Signal that player is ready
+              setPlayerReady(true);
+            } catch (e) {
+              console.error("Error initializing player:", e);
             }
           },
           onStateChange: async (event: YouTubeStateChangeEvent) => {
@@ -293,23 +307,11 @@ export default function MusicRoom() {
           },
         },
       });
-    }
-  };
-
-  // Load room data from storage
-  // Load room data from storage
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    if (roomId && view === "room") {
-      loadRoomData();
-      const interval = setInterval(loadRoomData, 2000);
-      return () => clearInterval(interval);
-    }
-  }, [roomId, view]);
+    },
+    [isPlaying]
+  );
 
   // Handle user leaving the page
-  // Handle user leaving the page
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (roomId && userName) {
       window.addEventListener("beforeunload", leaveRoom);
@@ -319,22 +321,30 @@ export default function MusicRoom() {
     }
   }, [roomId, userName]);
 
-  // Update timestamp periodically
+  // Update timestamp periodically via WebSocket
   useEffect(() => {
-    if (roomId && currentVideo && isPlaying && playerRef.current) {
-      const updateTimestamp = async () => {
+    if (
+      roomId &&
+      currentVideo &&
+      isPlaying &&
+      playerRef.current &&
+      wsRef.current?.readyState === WebSocket.OPEN
+    ) {
+      const updateTimestamp = () => {
         const currentTime = playerRef.current?.getCurrentTime?.();
         if (currentTime !== undefined) {
-          const videoResult = await window.localStorage.getItem(
-            `room:${roomId}:video`
-          );
-          if (videoResult) {
-            const videoData = JSON.parse(videoResult);
-            const updatedVideo = { ...videoData, timestamp: currentTime };
-            await window.localStorage.setItem(
-              `room:${roomId}:video`,
-              JSON.stringify(updatedVideo)
+          try {
+            wsRef.current?.send(
+              JSON.stringify({
+                type: "updateTimestamp",
+                roomId,
+                state: {
+                  currentVideo: { ...currentVideo, timestamp: currentTime },
+                },
+              })
             );
+          } catch (e) {
+            console.error("Failed to send timestamp:", e);
           }
         }
       };
@@ -396,101 +406,64 @@ export default function MusicRoom() {
 
   // Sync player with room state
   useEffect(() => {
-    if (playerRef.current && currentVideo && playerReady) {
-      const currentVideoId = playerRef.current.getVideoData?.().video_id;
+    // Only proceed if we're in the room view
+    if (view !== "room") return;
 
-      // Load new video if different
-      if (currentVideoId !== currentVideo.id) {
-        playerRef.current.loadVideoById({
-          videoId: currentVideo.id,
-          startSeconds: currentVideo.timestamp || 0,
-        });
-        return;
-      }
-
-      // Sync timestamp (only when video is playing)
-      if (isPlaying) {
-        const currentTime = playerRef.current.getCurrentTime?.();
-        if (
-          currentVideo.timestamp !== undefined &&
-          Math.abs(currentTime - currentVideo.timestamp) > 2
-        ) {
-          playerRef.current.seekTo?.(currentVideo.timestamp, true);
-        }
-      }
-
-      // Sync play/pause state
-      const playerState = playerRef.current.getPlayerState?.();
-      if (isPlaying && playerState !== 1) {
-        playerRef.current.playVideo?.();
-      } else if (!isPlaying && playerState === 1) {
-        playerRef.current.pauseVideo?.();
-      }
-    } else if (
-      currentVideo &&
-      playerReady &&
-      !playerRef.current &&
-      view === "room"
-    ) {
-      setTimeout(() => initializePlayer(currentVideo.id), 100);
-    }
-  }, [currentVideo, isPlaying, playerReady, view]);
-
-  const loadRoomData = async () => {
-    try {
-      const videoResult = await window.localStorage.getItem(
-        `room:${roomId}:video`
-      );
-      const queueResult = await window.localStorage.getItem(
-        `room:${roomId}:queue`
-      );
-      const membersResult = await window.localStorage.getItem(
-        `room:${roomId}:members`
-      );
-      const playingResult = await window.localStorage.getItem(
-        `room:${roomId}:playing`
-      );
-
-      if (videoResult && videoResult) {
-        try {
-          const video = JSON.parse(videoResult);
-          if (video && video !== null) {
-            setCurrentVideo(video);
-          } else {
-            setCurrentVideo(null);
+    // If we need to create the player
+    if (currentVideo && playerReady && !playerRef.current) {
+      const container = document.getElementById("youtube-player");
+      if (!container) {
+        console.log("Player container not mounted yet");
+        // Wait for container to be available
+        const checkInterval = setInterval(() => {
+          if (document.getElementById("youtube-player")) {
+            clearInterval(checkInterval);
+            initializePlayer(currentVideo.id);
           }
-        } catch (e) {
-          console.error("Error parsing video:", e);
-          setCurrentVideo(null);
-        }
+        }, 100);
+        return () => clearInterval(checkInterval);
       }
-      if (queueResult && queueResult) {
-        try {
-          setQueue(JSON.parse(queueResult));
-        } catch (e) {
-          console.error("Error parsing queue:", e);
-          setQueue([]);
-        }
-      }
-      if (membersResult && membersResult) {
-        try {
-          setMembers(JSON.parse(membersResult));
-        } catch (e) {
-          console.error("Error parsing members:", e);
-        }
-      }
-      if (playingResult && playingResult) {
-        try {
-          setIsPlaying(JSON.parse(playingResult));
-        } catch (e) {
-          console.error("Error parsing playing state:", e);
-          setIsPlaying(false);
-        }
-      }
-    } catch (error) {
-      console.log("Room loading:", error);
+      initializePlayer(currentVideo.id);
+      return;
     }
-  };
+
+    // If player exists, sync with room state
+    if (playerRef.current && currentVideo && playerReady) {
+      try {
+        const currentVideoId = playerRef.current.getVideoData?.().video_id;
+
+        // Load new video if different
+        if (currentVideoId !== currentVideo.id) {
+          playerRef.current.loadVideoById({
+            videoId: currentVideo.id,
+            startSeconds: currentVideo.timestamp || 0,
+          });
+          return;
+        }
+
+        // Sync timestamp (only when video is playing)
+        if (isPlaying) {
+          const currentTime = playerRef.current.getCurrentTime?.();
+          if (
+            currentVideo.timestamp !== undefined &&
+            Math.abs(currentTime - currentVideo.timestamp) > 2
+          ) {
+            playerRef.current.seekTo?.(currentVideo.timestamp, true);
+          }
+        }
+
+        // Sync play/pause state
+        const playerState = playerRef.current.getPlayerState?.();
+        if (isPlaying && playerState !== 1) {
+          playerRef.current.playVideo?.();
+        } else if (!isPlaying && playerState === 1) {
+          playerRef.current.pauseVideo?.();
+        }
+      } catch (e) {
+        console.error("Error syncing player state:", e);
+      }
+    }
+  }, [currentVideo, isPlaying, playerReady, view, initializePlayer]);
 
   const generateRoomId = () => {
     return Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -505,40 +478,32 @@ export default function MusicRoom() {
     }
 
     const newRoomId = generateRoomId();
-    const initialMembers = [{ name: userName, joinedAt: Date.now() }];
 
     try {
-      await window.localStorage.setItem(
-        `room:${newRoomId}:members`,
-        JSON.stringify(initialMembers)
-      );
-      await window.localStorage.setItem(
-        `room:${newRoomId}:playing`,
-        JSON.stringify(false)
-      );
-      await window.localStorage.setItem(
-        `room:${newRoomId}:queue`,
-        JSON.stringify([])
-      );
-
-      setRoomId(newRoomId);
-      setMembers(initialMembers);
-      setQueue([]);
-      setView("room");
-      // wait for websocket to be ready (if available) and broadcast initial state
-      try {
-        // wait a short time for the effect that creates the ws to run
-        const ok = await waitForWsOpen(wsRef.current, 3000);
-        if (ok) {
-          broadcastRoomState();
-        } else {
-          // if not connected, we'll still persist to localStorage and rely on
-          // other devices to create rooms via the server when they subscribe
-          setTimeout(() => broadcastRoomState(), 500);
+      // Create WebSocket first to ensure server connection
+      const wsUrl =
+        (import.meta.env.VITE_WS_URL as string) || "ws://localhost:3001";
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+        try {
+          wsRef.current = new WebSocket(wsUrl);
+          attachSocketHandlers(wsRef.current, newRoomId, userName);
+        } catch (e) {
+          console.error("WebSocket connection error:", e);
+          toast.error("Failed to connect to server. Please try again.");
+          return;
         }
-      } catch {
-        // ignore and continue
       }
+
+      // Wait for socket to be ready
+      const ok = await waitForWsOpen(wsRef.current, 3000);
+      if (!ok) {
+        toast.error("Could not connect to server. Please try again.");
+        return;
+      }
+
+      // Set local state and enter room - server will echo back the full state
+      setRoomId(newRoomId);
+      setView("room");
     } catch (error) {
       toast.error(`Error creating room. Please try again. ${error}`);
     }
@@ -707,27 +672,42 @@ export default function MusicRoom() {
           ...queue,
           { ...video, addedBy: userName, addedAt: Date.now() },
         ];
-        await window.localStorage.setItem(
-          `room:${roomId}:queue`,
-          JSON.stringify(updatedQueue)
+
+        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+          console.error("No WebSocket connection");
+          toast.error("Lost connection to server");
+          return;
+        }
+
+        // Update queue via WebSocket
+        wsRef.current.send(
+          JSON.stringify({
+            type: "updateQueue",
+            roomId,
+            state: { queue: updatedQueue },
+          })
         );
+
+        // Optimistically update local state
         setQueue(updatedQueue);
-        // broadcast updated queue
-        setTimeout(() => broadcastRoomState(), 100);
 
         // If no video is playing, start playing from queue
         if (!currentVideo) {
           const nextVideo: QueueItem = updatedQueue[0];
           await playVideo(nextVideo);
+
           // Remove from queue after starting playback
           const afterPlayQueue: QueueItem[] = updatedQueue.slice(1);
-          await window.localStorage.setItem(
-            `room:${roomId}:queue`,
-            JSON.stringify(afterPlayQueue)
+          wsRef.current.send(
+            JSON.stringify({
+              type: "updateQueue",
+              roomId,
+              state: { queue: afterPlayQueue },
+            })
           );
+
+          // Optimistically update local queue
           setQueue(afterPlayQueue);
-          // broadcast updated queue after starting playback
-          setTimeout(() => broadcastRoomState(), 100);
         }
       }
     } catch (error) {
@@ -739,31 +719,45 @@ export default function MusicRoom() {
     if (!video || !roomId) return;
 
     try {
-      await window.localStorage.setItem(
-        `room:${roomId}:video`,
-        JSON.stringify(video)
-      );
-      await window.localStorage.setItem(`room:${roomId}:playing`, "true");
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+        console.error("No WebSocket connection");
+        toast.error("Lost connection to server");
+        return;
+      }
 
+      // Send video update to server
+      wsRef.current.send(
+        JSON.stringify({
+          type: "updateVideo",
+          roomId,
+          state: { currentVideo: video },
+        })
+      );
+
+      // Send playing state update
+      wsRef.current.send(
+        JSON.stringify({
+          type: "updatePlaying",
+          roomId,
+          state: { playing: true },
+        })
+      );
+
+      // Update local UI state
       setCurrentVideo(video);
       setIsPlaying(true);
       setSearchResults([]);
       setSearchQuery("");
 
-      // broadcast new video/playing state
-      setTimeout(() => broadcastRoomState(), 200);
-
-      // Wait a bit for state to update
-      await new Promise((resolve) => setTimeout(resolve, 100));
-
+      // Initialize or update player
       if (!playerRef.current && playerReady) {
         initializePlayer(video.id);
       } else if (playerRef.current && playerRef.current.loadVideoById) {
-        const currentTime = playerRef.current.getCurrentTime?.();
+        // Use timestamp from video object if it exists, otherwise start at 0
         try {
           playerRef.current.loadVideoById({
             videoId: video.id,
-            startSeconds: Math.floor(currentTime || 0),
+            startSeconds: Math.floor(video.timestamp || 0),
           });
           setTimeout(() => {
             if (playerRef.current && playerRef.current.playVideo) {
@@ -772,6 +766,7 @@ export default function MusicRoom() {
           }, 300);
         } catch (error) {
           console.error("Error loading video in player:", error);
+          toast.error("Failed to load video in player");
         }
       }
     } catch (error) {
@@ -782,14 +777,25 @@ export default function MusicRoom() {
 
   const removeFromQueue = async (index: number) => {
     try {
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+        console.error("No WebSocket connection");
+        toast.error("Lost connection to server");
+        return;
+      }
+
       const updatedQueue = queue.filter((_, i) => i !== index);
-      await window.localStorage.setItem(
-        `room:${roomId}:queue`,
-        JSON.stringify(updatedQueue)
+
+      // Update queue via WebSocket
+      wsRef.current.send(
+        JSON.stringify({
+          type: "updateQueue",
+          roomId,
+          state: { queue: updatedQueue },
+        })
       );
+
+      // Optimistically update local state
       setQueue(updatedQueue);
-      // broadcast updated queue after advancing
-      setTimeout(() => broadcastRoomState(), 100);
     } catch (error) {
       toast.error(`Error removing from queue: ${error}`);
     }
@@ -808,25 +814,30 @@ export default function MusicRoom() {
 
   const playNextInQueue = async () => {
     try {
-      // Load latest queue from storage
-      const queueResult = await window.localStorage.getItem(
-        `room:${roomId}:queue`
-      );
-      let currentQueue = [];
-
-      if (queueResult && queueResult) {
-        try {
-          currentQueue = JSON.parse(queueResult);
-        } catch (e) {
-          console.error("Error parsing queue:", e);
-          currentQueue = [];
-        }
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+        console.error("No WebSocket connection");
+        toast.error("Lost connection to server");
+        return;
       }
 
-      if (!currentQueue || currentQueue.length === 0) {
+      if (!queue || queue.length === 0) {
         // No more songs in queue
-        await window.localStorage.setItem(`room:${roomId}:video`, "null");
-        await window.localStorage.setItem(`room:${roomId}:playing`, "false");
+        wsRef.current.send(
+          JSON.stringify({
+            type: "updateVideo",
+            roomId,
+            state: { currentVideo: null },
+          })
+        );
+        wsRef.current.send(
+          JSON.stringify({
+            type: "updatePlaying",
+            roomId,
+            state: { playing: false },
+          })
+        );
+
+        // Update local state
         setCurrentVideo(null);
         setIsPlaying(false);
 
@@ -837,17 +848,25 @@ export default function MusicRoom() {
       }
 
       // Get the next video but don't remove it yet
-      const nextVideo = currentQueue[0];
+      const nextVideo = {
+        ...queue[0],
+        timestamp: 0, // Force timestamp to 0 for next video
+      };
 
-      // Start playing the next video
+      // Start playing the next video (this will send video and playing state updates)
       await playVideo(nextVideo);
 
       // After starting playback, remove it from the queue
-      const updatedQueue = currentQueue.slice(1);
-      await window.localStorage.setItem(
-        `room:${roomId}:queue`,
-        JSON.stringify(updatedQueue)
+      const updatedQueue = queue.slice(1);
+      wsRef.current.send(
+        JSON.stringify({
+          type: "updateQueue",
+          roomId,
+          state: { queue: updatedQueue },
+        })
       );
+
+      // Optimistically update local queue
       setQueue(updatedQueue);
     } catch (error) {
       console.error("Error playing next video:", error);
@@ -879,15 +898,24 @@ export default function MusicRoom() {
 
   const updatePlayingState = async (playing: boolean) => {
     try {
-      await window.localStorage.setItem(
-        `room:${roomId}:playing`,
-        JSON.stringify(playing)
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+        console.error("No WebSocket connection");
+        return;
+      }
+
+      wsRef.current.send(
+        JSON.stringify({
+          type: "updatePlaying",
+          roomId,
+          state: { playing },
+        })
       );
+
+      // Optimistically update local state
       setIsPlaying(playing);
-      // broadcast play/pause change
-      setTimeout(() => broadcastRoomState(), 50);
     } catch (error) {
       console.error("Error updating playback state:", error);
+      toast.error("Failed to update playback state");
     }
   };
 
@@ -896,13 +924,14 @@ export default function MusicRoom() {
     toast.success("Room ID copied to clipboard!");
   };
 
-  const leaveRoom = async () => {
+  const leaveRoom = useCallback(async () => {
+    // Cleanup player if it exists
     if (playerRef.current) {
       playerRef.current.destroy();
       playerRef.current = null;
     }
 
-    // notify server
+    // Notify server and close socket
     try {
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify({ type: "leave", roomId, userName }));
@@ -912,31 +941,16 @@ export default function MusicRoom() {
       console.error("Error notifying leave:", e);
     }
 
-    try {
-      const membersResult = await window.localStorage.getItem(
-        `room:${roomId}:members`
-      );
-      const currentMembers = membersResult ? JSON.parse(membersResult) : [];
-      const updatedMembers = await currentMembers.filter(
-        (member: Member) => member.name !== userName
-      );
-
-      await window.localStorage.setItem(
-        `room:${roomId}:members`,
-        JSON.stringify(updatedMembers)
-      );
-
-      setView("home");
-      setRoomId("");
-      setCurrentVideo(null);
-      setIsPlaying(false);
-      setMembers(updatedMembers);
-      setSearchResults([]);
-      setQueue([]);
-    } catch (error) {
-      toast.error(`Error leaving room. Please try again. ${error}`);
-    }
-  };
+    // Reset all local state
+    setView("home");
+    setRoomId("");
+    setCurrentVideo(null);
+    setIsPlaying(false);
+    setMembers([]);
+    setSearchResults([]);
+    setQueue([]);
+    setSearchQuery("");
+  }, [roomId, userName]);
 
   // Home View
   if (view === "home") {
