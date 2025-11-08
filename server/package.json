@@ -1,0 +1,12 @@
+{
+  "name": "music-room-ws-server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node ws-server.js"
+  },
+  "dependencies": {
+    "ws": "^8.13.0"
+  }
+}

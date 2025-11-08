@@ -115,6 +115,22 @@ export default function MusicRoom() {
   const [showQueue, setShowQueue] = useState<boolean>(false);
   const playerRef = useRef<InstanceType<typeof window.YT.Player>>(null);
   const [playerReady, setPlayerReady] = useState<boolean>(false);
+  const wsRef = useRef<WebSocket | null>(null);
+
+  const broadcastRoomState = () => {
+    try {
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+      const state = {
+        members,
+        currentVideo,
+        queue,
+        playing: isPlaying,
+      };
+      wsRef.current.send(JSON.stringify({ type: "update", roomId, state }));
+    } catch (e) {
+      console.error("Error broadcasting room state", e);
+    }
+  };
 
   // Loads the IFrame API code asynchronously.
   useEffect(() => {
@@ -225,6 +241,63 @@ export default function MusicRoom() {
       return () => clearInterval(interval);
     }
   }, [roomId, currentVideo, isPlaying]);
+
+  // WebSocket connection to sync rooms across devices
+  useEffect(() => {
+    if (roomId && view === "room") {
+      const wsUrl =
+        (import.meta.env.VITE_WS_URL as string) || "ws://localhost:3001";
+      try {
+        wsRef.current = new WebSocket(wsUrl);
+      } catch (e) {
+        console.error("WebSocket connection error:", e);
+        return;
+      }
+
+      wsRef.current.onopen = () => {
+        try {
+          wsRef.current?.send(
+            JSON.stringify({ type: "subscribe", roomId, userName })
+          );
+        } catch (e) {
+          console.error("WS send error:", e);
+        }
+      };
+
+      wsRef.current.onmessage = (evt) => {
+        try {
+          const msg = JSON.parse(evt.data);
+          if (msg?.type === "room_state" && msg.roomId === roomId) {
+            const s = msg.state || {};
+            setMembers(s.members || []);
+            setQueue(s.queue || []);
+            setCurrentVideo(s.currentVideo || null);
+            setIsPlaying(!!s.playing);
+          }
+        } catch (e) {
+          console.error("WS message parse error:", e);
+        }
+      };
+
+      wsRef.current.onclose = () => {
+        wsRef.current = null;
+      };
+
+      return () => {
+        if (wsRef.current) {
+          try {
+            wsRef.current.send(
+              JSON.stringify({ type: "leave", roomId, userName })
+            );
+          } catch (e) {
+            console.error(e);
+          }
+          wsRef.current.close();
+          wsRef.current = null;
+        }
+      };
+    }
+  }, [roomId, view, userName]);
 
   // Sync player with room state
   useEffect(() => {
@@ -357,6 +430,8 @@ export default function MusicRoom() {
       setMembers(initialMembers);
       setQueue([]);
       setView("room");
+      // broadcast initial state to other devices (if connected)
+      setTimeout(() => broadcastRoomState(), 300);
     } catch (error) {
       toast.error(`Error creating room. Please try again. ${error}`);
     }
@@ -395,6 +470,8 @@ export default function MusicRoom() {
       setMembers(updatedMembers);
       setView("room");
       loadRoomData();
+      // send current state to server so other devices can sync
+      setTimeout(() => broadcastRoomState(), 300);
     } catch (error) {
       toast.error(`Error joining room. Please try again. ${error}`);
     }
@@ -467,6 +544,8 @@ export default function MusicRoom() {
           JSON.stringify(updatedQueue)
         );
         setQueue(updatedQueue);
+        // broadcast updated queue
+        setTimeout(() => broadcastRoomState(), 100);
 
         // If no video is playing, start playing from queue
         if (!currentVideo) {
@@ -479,6 +558,8 @@ export default function MusicRoom() {
             JSON.stringify(afterPlayQueue)
           );
           setQueue(afterPlayQueue);
+          // broadcast updated queue after starting playback
+          setTimeout(() => broadcastRoomState(), 100);
         }
       }
     } catch (error) {
@@ -500,6 +581,9 @@ export default function MusicRoom() {
       setIsPlaying(true);
       setSearchResults([]);
       setSearchQuery("");
+
+      // broadcast new video/playing state
+      setTimeout(() => broadcastRoomState(), 200);
 
       // Wait a bit for state to update
       await new Promise((resolve) => setTimeout(resolve, 100));
@@ -536,6 +620,8 @@ export default function MusicRoom() {
         JSON.stringify(updatedQueue)
       );
       setQueue(updatedQueue);
+      // broadcast updated queue after advancing
+      setTimeout(() => broadcastRoomState(), 100);
     } catch (error) {
       toast.error(`Error removing from queue: ${error}`);
     }
@@ -630,6 +716,8 @@ export default function MusicRoom() {
         JSON.stringify(playing)
       );
       setIsPlaying(playing);
+      // broadcast play/pause change
+      setTimeout(() => broadcastRoomState(), 50);
     } catch (error) {
       console.error("Error updating playback state:", error);
     }
@@ -644,6 +732,16 @@ export default function MusicRoom() {
     if (playerRef.current) {
       playerRef.current.destroy();
       playerRef.current = null;
+    }
+
+    // notify server
+    try {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: "leave", roomId, userName }));
+        wsRef.current.close();
+      }
+    } catch (e) {
+      console.error("Error notifying leave:", e);
     }
 
     try {
