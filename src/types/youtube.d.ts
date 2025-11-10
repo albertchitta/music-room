@@ -4,6 +4,7 @@ export interface YTPlayer {
   getCurrentTime(): number;
   seekTo(seconds: number, allowSeekAhead: boolean): void;
   destroy(): void;
+  playVideo(): void;
 }
 
 export interface YTPlayerEvent {
