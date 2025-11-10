@@ -1,4 +1,4 @@
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useState } from "react";
 import { Music, SkipForward, Play, Pause } from "lucide-react";
 import type { YTPlayerEvent } from "../types/youtube";
 
@@ -33,31 +33,20 @@ export default function VideoPlayer({
   const playerRef = useRef<any>(null); // Use 'any' to match YouTube API instance
   const currentVideoIdRef = useRef<string | null>(null);
   const onVideoEndRef = useRef<(() => void) | undefined>(onVideoEnd);
+  const [currentTime, setCurrentTime] = useState<number>(0);
+  const [duration, setDuration] = useState<number>(0);
+  const [isSeeking, setIsSeeking] = useState<boolean>(false);
+  const [playerReady, setPlayerReady] = useState<boolean>(false);
 
   // Handle play/pause button click
   const handlePlayPauseClick = async () => {
-    console.log("Button clicked, current isPlaying:", isPlaying);
-
     if (playerRef.current) {
       try {
-        const currentState = playerRef.current.getPlayerState?.();
-        console.log("Current player state:", currentState);
-
         if (isPlaying) {
-          // Currently playing, so pause it
-          console.log("Pausing player");
           playerRef.current.pauseVideo();
         } else {
-          // Currently paused, so play it
-          console.log("Playing player");
           await playerRef.current.playVideo();
         }
-
-        // Give the player a moment to change state
-        setTimeout(() => {
-          const newState = playerRef.current?.getPlayerState?.();
-          console.log("Player state after action:", newState);
-        }, 200);
       } catch (e) {
         console.error("Error controlling player:", e);
       }
@@ -72,62 +61,84 @@ export default function VideoPlayer({
     onVideoEndRef.current = onVideoEnd;
   }, [onVideoEnd]);
 
+  // Update current time and duration periodically
+  useEffect(() => {
+    if (playerRef.current && currentVideo && !isSeeking && playerReady) {
+      const interval = setInterval(() => {
+        if (playerRef.current) {
+          const time = playerRef.current.getCurrentTime?.();
+          const dur = playerRef.current.getDuration?.();
+
+          if (time !== undefined) setCurrentTime(time);
+          if (dur !== undefined) setDuration(dur);
+        }
+      }, 500); // Update twice per second
+
+      return () => clearInterval(interval);
+    }
+  }, [currentVideo?.id, isSeeking, playerReady]); // Use video ID instead of entire object
+
+  // Handle seek bar change
+  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newTime = parseFloat(e.target.value);
+    setCurrentTime(newTime);
+    setIsSeeking(true);
+  };
+
+  // Handle seek bar mouse up (commit the seek)
+  const handleSeekCommit = () => {
+    if (playerRef.current) {
+      playerRef.current.seekTo(currentTime, true);
+
+      // Wait for the seek to complete, then sync the UI with actual player position
+      setTimeout(() => {
+        if (playerRef.current) {
+          const actualTime = playerRef.current.getCurrentTime?.();
+          if (actualTime !== undefined) {
+            setCurrentTime(actualTime);
+          }
+        }
+        setIsSeeking(false);
+      }, 300);
+    } else {
+      setIsSeeking(false);
+    }
+  };
+
+  // Format time as MM:SS
+  const formatTime = (seconds: number): string => {
+    if (!seconds || isNaN(seconds)) return "0:00";
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, "0")}`;
+  };
+
   // Sync player state with isPlaying prop
   useEffect(() => {
     if (playerRef.current && currentVideo) {
       try {
         const playerState = playerRef.current.getPlayerState?.();
-        console.log(
-          "Sync effect - isPlaying:",
-          isPlaying,
-          "playerState:",
-          playerState,
-          "playerRef exists:",
-          !!playerRef.current,
-          "playVideo exists:",
-          !!playerRef.current.playVideo
-        );
 
         // 1 = playing, 2 = paused, -1 = unstarted, 0 = ended, 3 = buffering, 5 = cued
         if (isPlaying && playerState !== 1 && playerState !== 3) {
           // Should be playing but isn't (and not buffering)
-          console.log(
-            "Attempting to call playVideo(), playerState:",
-            playerState
-          );
           if (playerRef.current.playVideo) {
             // Add a small delay to ensure the player is ready
             setTimeout(() => {
               if (playerRef.current && playerRef.current.playVideo) {
                 playerRef.current.playVideo();
-                console.log("playVideo() called successfully");
               }
             }, 100);
-          } else {
-            console.error("playVideo method does not exist!");
           }
         } else if (!isPlaying && playerState === 1) {
           // Should be paused but is playing
-          console.log("Calling pauseVideo()");
           if (playerRef.current.pauseVideo) {
             playerRef.current.pauseVideo();
-            console.log("pauseVideo() called successfully");
-          } else {
-            console.error("pauseVideo method does not exist!");
           }
-        } else {
-          console.log("No action needed - states match or buffering");
         }
       } catch (e) {
         console.error("Error syncing player state:", e);
       }
-    } else {
-      console.log(
-        "Sync effect skipped - playerRef:",
-        !!playerRef.current,
-        "currentVideo:",
-        !!currentVideo
-      );
     }
   }, [isPlaying, currentVideo]);
 
@@ -139,6 +150,9 @@ export default function VideoPlayer({
       }
 
       currentVideoIdRef.current = currentVideo.id;
+      setPlayerReady(false); // Reset ready state for new video
+      setCurrentTime(0); // Reset time
+      setDuration(0); // Reset duration
 
       if (playerRef.current) {
         playerRef.current.destroy();
@@ -149,7 +163,22 @@ export default function VideoPlayer({
         videoId: currentVideo.id,
         events: {
           onReady: (event: YTPlayerEvent) => {
+            // Seek to the timestamp from the room state if available
+            if (currentVideo.timestamp) {
+              event.target.seekTo(currentVideo.timestamp, true);
+            }
             event.target.playVideo(); // Automatically start video
+
+            // Initialize time and duration once player is ready
+            setTimeout(() => {
+              if (playerRef.current) {
+                const time = playerRef.current.getCurrentTime?.();
+                const dur = playerRef.current.getDuration?.();
+                if (time !== undefined) setCurrentTime(time);
+                if (dur !== undefined) setDuration(dur);
+                setPlayerReady(true); // Mark player as ready
+              }
+            }, 500);
           },
           onStateChange: (event: any) => {
             // State 0 means video ended
@@ -182,6 +211,36 @@ export default function VideoPlayer({
             {currentVideo.title}
           </h3>
           <p className="text-gray-600 text-sm mb-4">{currentVideo.channel}</p>
+
+          {/* Seek bar */}
+          {/* <div className="mb-4">
+            <div className="flex items-center gap-3">
+              <span className="text-sm text-gray-600 min-w-[45px]">
+                {formatTime(currentTime)}
+              </span>
+              <input
+                type="range"
+                min="0"
+                max={duration || 0}
+                value={currentTime || 0}
+                onChange={handleSeek}
+                onMouseUp={handleSeekCommit}
+                onTouchEnd={handleSeekCommit}
+                className="flex-1 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                style={{
+                  background: `linear-gradient(to right, #2563eb 0%, #2563eb ${
+                    duration > 0 ? (currentTime / duration) * 100 : 0
+                  }%, #e5e7eb ${
+                    duration > 0 ? (currentTime / duration) * 100 : 0
+                  }%, #e5e7eb 100%)`,
+                }}
+              />
+              <span className="text-sm text-gray-600 min-w-[45px] text-right">
+                {formatTime(duration)}
+              </span>
+            </div>
+          </div> */}
+
           <div className="flex items-center gap-4">
             <button
               onClick={handlePlayPauseClick}

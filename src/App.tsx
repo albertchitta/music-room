@@ -916,15 +916,10 @@ export default function MusicRoom() {
   }, [queue, roomId, playVideo]);
 
   const togglePlayPause = async () => {
-    console.log("togglePlayPause called, current isPlaying:", isPlaying);
     try {
       // Update the playing state via WebSocket
       // The VideoPlayer component will handle the actual player control
       await updatePlayingState(!isPlaying);
-      console.log(
-        "togglePlayPause completed, new state should be:",
-        !isPlaying
-      );
     } catch (error) {
       console.error("Error toggling play/pause:", error);
       toast.error("Error controlling playback");
@@ -933,7 +928,6 @@ export default function MusicRoom() {
 
   const updatePlayingState = useCallback(
     async (playing: boolean) => {
-      console.log("updatePlayingState called with:", playing);
       try {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
           console.error("No WebSocket connection");
@@ -947,11 +941,9 @@ export default function MusicRoom() {
             state: { playing },
           })
         );
-        console.log("Sent updatePlaying message to WebSocket");
 
         // Optimistically update local state
         setIsPlaying(playing);
-        console.log("Updated local isPlaying to:", playing);
       } catch (error) {
         console.error("Error updating playback state:", error);
         toast.error("Failed to update playback state");
