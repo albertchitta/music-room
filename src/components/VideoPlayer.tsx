@@ -1,4 +1,6 @@
-import { Music, Play, Pause, SkipForward } from "lucide-react";
+import { useRef, useEffect } from "react";
+import { Music, SkipForward } from "lucide-react";
+import type { YTPlayerEvent } from "../types/youtube";
 
 interface QueueItem {
   id: string;
@@ -20,11 +22,35 @@ interface VideoPlayerProps {
 
 export default function VideoPlayer({
   currentVideo,
-  isPlaying,
   queueLength,
-  onTogglePlayPause,
   onSkipToNext,
 }: VideoPlayerProps) {
+  const playerRef = useRef<any>(null); // Use 'any' to match YouTube API instance
+
+  useEffect(() => {
+    if (window.YT && currentVideo) {
+      if (playerRef.current) {
+        playerRef.current.destroy();
+      }
+      playerRef.current = new window.YT.Player("youtube-player", {
+        height: "100%",
+        width: "100%",
+        videoId: currentVideo.id,
+        events: {
+          onReady: (event: YTPlayerEvent) => {
+            event.target.playVideo(); // Automatically start video
+          },
+        },
+      });
+    }
+    return () => {
+      if (playerRef.current) {
+        playerRef.current.destroy();
+        playerRef.current = null;
+      }
+    };
+  }, [currentVideo]);
+
   return (
     <div className="bg-white rounded-2xl shadow-xl p-6">
       {currentVideo ? (
@@ -36,33 +62,16 @@ export default function VideoPlayer({
           <h3 className="text-xl font-bold text-gray-800 mb-2">
             {currentVideo.title}
           </h3>
-          <p className="text-gray-600 text-sm mb-4">
-            {currentVideo.channel}
-          </p>
+          <p className="text-gray-600 text-sm mb-4">{currentVideo.channel}</p>
           <div className="flex items-center gap-4">
-            <button
-              onClick={onTogglePlayPause}
-              className="bg-purple-600 text-white p-4 rounded-full hover:bg-purple-700 transition"
-            >
-              {isPlaying ? (
-                <Pause className="w-6 h-6" />
-              ) : (
-                <Play className="w-6 h-6" />
-              )}
-            </button>
             <button
               onClick={onSkipToNext}
               disabled={queueLength === 0}
               className="bg-blue-600 text-white p-4 rounded-full hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
-              title={
-                queueLength === 0 ? "No songs in queue" : "Skip to next"
-              }
+              title={queueLength === 0 ? "No songs in queue" : "Skip to next"}
             >
               <SkipForward className="w-6 h-6" />
             </button>
-            <span className="text-sm text-gray-600">
-              {isPlaying ? "Playing for everyone" : "Paused"}
-            </span>
           </div>
           <p className="text-xs text-gray-500 mt-2">
             {queueLength > 0
@@ -82,4 +91,3 @@ export default function VideoPlayer({
     </div>
   );
 }
-

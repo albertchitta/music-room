@@ -186,7 +186,27 @@ export default function MusicRoom() {
               const s = msg.state || {};
               setMembers(s.members || []);
               setQueue(s.queue || []);
-              setCurrentVideo(s.currentVideo || null);
+
+              // Only update currentVideo if it actually changed (compare video ID)
+              setCurrentVideo((prevVideo) => {
+                const newVideo = s.currentVideo || null;
+                // If both are null, no change
+                if (!prevVideo && !newVideo) return prevVideo;
+                // If one is null and other isn't, it changed
+                if (!prevVideo || !newVideo) return newVideo;
+                // If same video ID and timestamp is close (within 1 second), keep previous reference
+                if (
+                  prevVideo.id === newVideo.id &&
+                  Math.abs(
+                    (prevVideo.timestamp || 0) - (newVideo.timestamp || 0)
+                  ) < 1
+                ) {
+                  return prevVideo;
+                }
+                // Otherwise, it's a real change
+                return newVideo;
+              });
+
               setIsPlaying(!!s.playing);
             }
           } catch (e) {
