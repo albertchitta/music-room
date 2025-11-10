@@ -1,5 +1,5 @@
-import { useRef, useEffect, useState } from "react";
-import { Music, SkipForward, Play, Pause } from "lucide-react";
+import { useRef, useEffect } from "react";
+import { Music, SkipForward } from "lucide-react";
 import type { YTPlayerEvent } from "../types/youtube";
 
 interface QueueItem {
@@ -20,102 +20,24 @@ interface VideoPlayerProps {
   onSkipToNext: () => void;
   onVideoEnd?: () => void;
   onPlayerStateChange?: (isPlaying: boolean) => void;
+  onSeek?: (timestamp: number) => void;
 }
 
 export default function VideoPlayer({
   currentVideo,
   isPlaying,
   queueLength,
-  onTogglePlayPause,
   onSkipToNext,
   onVideoEnd,
 }: VideoPlayerProps) {
   const playerRef = useRef<any>(null); // Use 'any' to match YouTube API instance
   const currentVideoIdRef = useRef<string | null>(null);
   const onVideoEndRef = useRef<(() => void) | undefined>(onVideoEnd);
-  const [currentTime, setCurrentTime] = useState<number>(0);
-  const [duration, setDuration] = useState<number>(0);
-  const [isSeeking, setIsSeeking] = useState<boolean>(false);
-  const wasPlayingRef = useRef<boolean>(false);
-
-  // Handle play/pause button click
-  const handlePlayPauseClick = async () => {
-    if (playerRef.current) {
-      try {
-        if (isPlaying) {
-          playerRef.current.pauseVideo();
-        } else {
-          await playerRef.current.playVideo();
-        }
-      } catch (e) {
-        console.error("Error controlling player:", e);
-      }
-    }
-
-    // Update the WebSocket state
-    onTogglePlayPause();
-  };
 
   // Keep the ref updated with the latest callback
   useEffect(() => {
     onVideoEndRef.current = onVideoEnd;
   }, [onVideoEnd]);
-
-  // Update current time and duration periodically
-  useEffect(() => {
-    if (playerRef.current && currentVideo && !isSeeking) {
-      const interval = setInterval(() => {
-        if (playerRef.current) {
-          const time = playerRef.current.getCurrentTime?.();
-          const dur = playerRef.current.getDuration?.();
-
-          if (time !== undefined) setCurrentTime(time);
-          if (dur !== undefined) setDuration(dur);
-        }
-      }, 500); // Update twice per second
-
-      return () => clearInterval(interval);
-    }
-  }, [currentVideo?.id, isSeeking]);
-
-  // Handle seek bar change
-  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newTime = parseFloat(e.target.value);
-    setCurrentTime(newTime);
-
-    // Remember if video was playing before seeking
-    if (!isSeeking && playerRef.current) {
-      const playerState = playerRef.current.getPlayerState?.();
-      wasPlayingRef.current = playerState === 1; // 1 = playing
-    }
-
-    setIsSeeking(true);
-  };
-
-  // Handle seek bar mouse up (commit the seek)
-  const handleSeekCommit = () => {
-    if (playerRef.current) {
-      playerRef.current.seekTo(currentTime, true);
-
-      // Resume playing if video was playing before seek
-      setTimeout(() => {
-        if (playerRef.current && wasPlayingRef.current) {
-          playerRef.current.playVideo();
-        }
-        setIsSeeking(false);
-      }, 100);
-    } else {
-      setIsSeeking(false);
-    }
-  };
-
-  // Format time as MM:SS
-  const formatTime = (seconds: number): string => {
-    if (!seconds || isNaN(seconds)) return "0:00";
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs.toString().padStart(2, "0")}`;
-  };
 
   // Sync player state with isPlaying prop
   useEffect(() => {
@@ -169,16 +91,6 @@ export default function VideoPlayer({
               event.target.seekTo(currentVideo.timestamp, true);
             }
             event.target.playVideo(); // Automatically start video
-
-            // Initialize time and duration
-            setTimeout(() => {
-              if (playerRef.current) {
-                const time = playerRef.current.getCurrentTime?.();
-                const dur = playerRef.current.getDuration?.();
-                if (time !== undefined) setCurrentTime(time);
-                if (dur !== undefined) setDuration(dur);
-              }
-            }, 500);
           },
           onStateChange: (event: any) => {
             // State 0 means video ended
@@ -212,47 +124,7 @@ export default function VideoPlayer({
           </h3>
           <p className="text-gray-600 text-sm mb-4">{currentVideo.channel}</p>
 
-          {/* Seek bar */}
-          <div className="mb-4">
-            <div className="flex items-center gap-3">
-              <span className="text-sm text-gray-600 min-w-[45px]">
-                {formatTime(currentTime)}
-              </span>
-              <input
-                type="range"
-                min="0"
-                max={duration || 0}
-                value={currentTime || 0}
-                onChange={handleSeek}
-                onMouseUp={handleSeekCommit}
-                onTouchEnd={handleSeekCommit}
-                className="flex-1 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
-                style={{
-                  background: `linear-gradient(to right, #2563eb 0%, #2563eb ${
-                    duration > 0 ? (currentTime / duration) * 100 : 0
-                  }%, #e5e7eb ${
-                    duration > 0 ? (currentTime / duration) * 100 : 0
-                  }%, #e5e7eb 100%)`,
-                }}
-              />
-              <span className="text-sm text-gray-600 min-w-[45px] text-right">
-                {formatTime(duration)}
-              </span>
-            </div>
-          </div>
-
           <div className="flex items-center gap-4">
-            <button
-              onClick={handlePlayPauseClick}
-              className="bg-blue-600 text-white p-4 rounded-full hover:bg-blue-700 transition"
-              title={isPlaying ? "Pause" : "Play"}
-            >
-              {isPlaying ? (
-                <Pause className="w-6 h-6" />
-              ) : (
-                <Play className="w-6 h-6" />
-              )}
-            </button>
             <button
               onClick={onSkipToNext}
               disabled={queueLength === 0}

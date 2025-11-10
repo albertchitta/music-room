@@ -43,6 +43,7 @@ interface RoomViewProps {
   onTogglePlayPause: () => void;
   onSkipToNext: () => void;
   onVideoEnd?: () => void;
+  onSeek?: (timestamp: number) => void;
 }
 
 export default function RoomView({
@@ -65,6 +66,7 @@ export default function RoomView({
   onTogglePlayPause,
   onSkipToNext,
   onVideoEnd,
+  onSeek,
 }: RoomViewProps) {
   return (
     <div className="min-h-screen bg-slate-950 p-4">
@@ -90,6 +92,7 @@ export default function RoomView({
               onTogglePlayPause={onTogglePlayPause}
               onSkipToNext={onSkipToNext}
               onVideoEnd={onVideoEnd}
+              onSeek={onSeek}
             />
 
             {/* Search */}

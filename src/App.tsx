@@ -926,6 +926,35 @@ export default function MusicRoom() {
     }
   };
 
+  const handleSeek = useCallback(
+    async (timestamp: number) => {
+      try {
+        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+          console.error("No WebSocket connection");
+          return;
+        }
+
+        if (!currentVideo) {
+          return;
+        }
+
+        // Send the new timestamp to sync with other members
+        wsRef.current.send(
+          JSON.stringify({
+            type: "updateTimestamp",
+            roomId,
+            state: {
+              currentVideo: { ...currentVideo, timestamp },
+            },
+          })
+        );
+      } catch (error) {
+        console.error("Error sending seek position:", error);
+      }
+    },
+    [roomId, currentVideo]
+  );
+
   const updatePlayingState = useCallback(
     async (playing: boolean) => {
       try {
@@ -1052,6 +1081,7 @@ export default function MusicRoom() {
       onTogglePlayPause={togglePlayPause}
       onSkipToNext={skipToNext}
       onVideoEnd={playNextInQueue}
+      onSeek={handleSeek}
     />
   );
 }
