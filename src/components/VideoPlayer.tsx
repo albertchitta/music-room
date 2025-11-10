@@ -18,17 +18,38 @@ interface VideoPlayerProps {
   queueLength: number;
   onTogglePlayPause: () => void;
   onSkipToNext: () => void;
+  onVideoEnd?: () => void;
 }
 
 export default function VideoPlayer({
   currentVideo,
   queueLength,
   onSkipToNext,
+  onVideoEnd,
 }: VideoPlayerProps) {
   const playerRef = useRef<any>(null); // Use 'any' to match YouTube API instance
+  const currentVideoIdRef = useRef<string | null>(null);
+  const onVideoEndRef = useRef<(() => void) | undefined>(onVideoEnd);
+
+  // Keep the ref updated with the latest callback
+  useEffect(() => {
+    onVideoEndRef.current = onVideoEnd;
+  }, [onVideoEnd]);
 
   useEffect(() => {
     if (window.YT && currentVideo) {
+      // Only recreate player if the video ID actually changed
+      if (currentVideoIdRef.current === currentVideo.id && playerRef.current) {
+        console.log("VideoPlayer: Same video, not recreating player");
+        return;
+      }
+
+      console.log(
+        "VideoPlayer: New video, creating player for:",
+        currentVideo.title
+      );
+      currentVideoIdRef.current = currentVideo.id;
+
       if (playerRef.current) {
         playerRef.current.destroy();
       }
@@ -39,6 +60,16 @@ export default function VideoPlayer({
         events: {
           onReady: (event: YTPlayerEvent) => {
             event.target.playVideo(); // Automatically start video
+          },
+          onStateChange: (event: any) => {
+            console.log("VideoPlayer: Player state changed:", event.data);
+            // State 0 means video ended
+            if (event.data === 0) {
+              console.log("VideoPlayer: Video ended, calling onVideoEnd");
+              if (onVideoEndRef.current) {
+                onVideoEndRef.current();
+              }
+            }
           },
         },
       });

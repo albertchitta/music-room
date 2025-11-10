@@ -42,6 +42,7 @@ interface RoomViewProps {
   onRemoveFromQueue: (index: number) => void;
   onTogglePlayPause: () => void;
   onSkipToNext: () => void;
+  onVideoEnd?: () => void;
 }
 
 export default function RoomView({
@@ -63,6 +64,7 @@ export default function RoomView({
   onRemoveFromQueue,
   onTogglePlayPause,
   onSkipToNext,
+  onVideoEnd,
 }: RoomViewProps) {
   return (
     <div className="min-h-screen bg-slate-950 p-4">
@@ -87,6 +89,7 @@ export default function RoomView({
               queueLength={queue.length}
               onTogglePlayPause={onTogglePlayPause}
               onSkipToNext={onSkipToNext}
+              onVideoEnd={onVideoEnd}
             />
 
             {/* Search */}
@@ -115,4 +118,3 @@ export default function RoomView({
     </div>
   );
 }
-
