@@ -36,7 +36,7 @@ export default function VideoPlayer({
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [duration, setDuration] = useState<number>(0);
   const [isSeeking, setIsSeeking] = useState<boolean>(false);
-  const [playerReady, setPlayerReady] = useState<boolean>(false);
+  const wasPlayingRef = useRef<boolean>(false);
 
   // Handle play/pause button click
   const handlePlayPauseClick = async () => {
@@ -63,7 +63,7 @@ export default function VideoPlayer({
 
   // Update current time and duration periodically
   useEffect(() => {
-    if (playerRef.current && currentVideo && !isSeeking && playerReady) {
+    if (playerRef.current && currentVideo && !isSeeking) {
       const interval = setInterval(() => {
         if (playerRef.current) {
           const time = playerRef.current.getCurrentTime?.();
@@ -76,12 +76,19 @@ export default function VideoPlayer({
 
       return () => clearInterval(interval);
     }
-  }, [currentVideo?.id, isSeeking, playerReady]); // Use video ID instead of entire object
+  }, [currentVideo?.id, isSeeking]);
 
   // Handle seek bar change
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newTime = parseFloat(e.target.value);
     setCurrentTime(newTime);
+
+    // Remember if video was playing before seeking
+    if (!isSeeking && playerRef.current) {
+      const playerState = playerRef.current.getPlayerState?.();
+      wasPlayingRef.current = playerState === 1; // 1 = playing
+    }
+
     setIsSeeking(true);
   };
 
@@ -90,16 +97,13 @@ export default function VideoPlayer({
     if (playerRef.current) {
       playerRef.current.seekTo(currentTime, true);
 
-      // Wait for the seek to complete, then sync the UI with actual player position
+      // Resume playing if video was playing before seek
       setTimeout(() => {
-        if (playerRef.current) {
-          const actualTime = playerRef.current.getCurrentTime?.();
-          if (actualTime !== undefined) {
-            setCurrentTime(actualTime);
-          }
+        if (playerRef.current && wasPlayingRef.current) {
+          playerRef.current.playVideo();
         }
         setIsSeeking(false);
-      }, 300);
+      }, 100);
     } else {
       setIsSeeking(false);
     }
@@ -150,9 +154,6 @@ export default function VideoPlayer({
       }
 
       currentVideoIdRef.current = currentVideo.id;
-      setPlayerReady(false); // Reset ready state for new video
-      setCurrentTime(0); // Reset time
-      setDuration(0); // Reset duration
 
       if (playerRef.current) {
         playerRef.current.destroy();
@@ -169,14 +170,13 @@ export default function VideoPlayer({
             }
             event.target.playVideo(); // Automatically start video
 
-            // Initialize time and duration once player is ready
+            // Initialize time and duration
             setTimeout(() => {
               if (playerRef.current) {
                 const time = playerRef.current.getCurrentTime?.();
                 const dur = playerRef.current.getDuration?.();
                 if (time !== undefined) setCurrentTime(time);
                 if (dur !== undefined) setDuration(dur);
-                setPlayerReady(true); // Mark player as ready
               }
             }, 500);
           },
@@ -213,7 +213,7 @@ export default function VideoPlayer({
           <p className="text-gray-600 text-sm mb-4">{currentVideo.channel}</p>
 
           {/* Seek bar */}
-          {/* <div className="mb-4">
+          <div className="mb-4">
             <div className="flex items-center gap-3">
               <span className="text-sm text-gray-600 min-w-[45px]">
                 {formatTime(currentTime)}
@@ -239,7 +239,7 @@ export default function VideoPlayer({
                 {formatTime(duration)}
               </span>
             </div>
-          </div> */}
+          </div>
 
           <div className="flex items-center gap-4">
             <button
