@@ -1,5 +1,5 @@
 import { useRef, useEffect } from "react";
-import { Music, SkipForward } from "lucide-react";
+import { Music, SkipForward, Play, Pause } from "lucide-react";
 import type { YTPlayerEvent } from "../types/youtube";
 
 interface QueueItem {
@@ -19,11 +19,14 @@ interface VideoPlayerProps {
   onTogglePlayPause: () => void;
   onSkipToNext: () => void;
   onVideoEnd?: () => void;
+  onPlayerStateChange?: (isPlaying: boolean) => void;
 }
 
 export default function VideoPlayer({
   currentVideo,
+  isPlaying,
   queueLength,
+  onTogglePlayPause,
   onSkipToNext,
   onVideoEnd,
 }: VideoPlayerProps) {
@@ -31,10 +34,102 @@ export default function VideoPlayer({
   const currentVideoIdRef = useRef<string | null>(null);
   const onVideoEndRef = useRef<(() => void) | undefined>(onVideoEnd);
 
+  // Handle play/pause button click
+  const handlePlayPauseClick = async () => {
+    console.log("Button clicked, current isPlaying:", isPlaying);
+
+    if (playerRef.current) {
+      try {
+        const currentState = playerRef.current.getPlayerState?.();
+        console.log("Current player state:", currentState);
+
+        if (isPlaying) {
+          // Currently playing, so pause it
+          console.log("Pausing player");
+          playerRef.current.pauseVideo();
+        } else {
+          // Currently paused, so play it
+          console.log("Playing player");
+          await playerRef.current.playVideo();
+        }
+
+        // Give the player a moment to change state
+        setTimeout(() => {
+          const newState = playerRef.current?.getPlayerState?.();
+          console.log("Player state after action:", newState);
+        }, 200);
+      } catch (e) {
+        console.error("Error controlling player:", e);
+      }
+    }
+
+    // Update the WebSocket state
+    onTogglePlayPause();
+  };
+
   // Keep the ref updated with the latest callback
   useEffect(() => {
     onVideoEndRef.current = onVideoEnd;
   }, [onVideoEnd]);
+
+  // Sync player state with isPlaying prop
+  useEffect(() => {
+    if (playerRef.current && currentVideo) {
+      try {
+        const playerState = playerRef.current.getPlayerState?.();
+        console.log(
+          "Sync effect - isPlaying:",
+          isPlaying,
+          "playerState:",
+          playerState,
+          "playerRef exists:",
+          !!playerRef.current,
+          "playVideo exists:",
+          !!playerRef.current.playVideo
+        );
+
+        // 1 = playing, 2 = paused, -1 = unstarted, 0 = ended, 3 = buffering, 5 = cued
+        if (isPlaying && playerState !== 1 && playerState !== 3) {
+          // Should be playing but isn't (and not buffering)
+          console.log(
+            "Attempting to call playVideo(), playerState:",
+            playerState
+          );
+          if (playerRef.current.playVideo) {
+            // Add a small delay to ensure the player is ready
+            setTimeout(() => {
+              if (playerRef.current && playerRef.current.playVideo) {
+                playerRef.current.playVideo();
+                console.log("playVideo() called successfully");
+              }
+            }, 100);
+          } else {
+            console.error("playVideo method does not exist!");
+          }
+        } else if (!isPlaying && playerState === 1) {
+          // Should be paused but is playing
+          console.log("Calling pauseVideo()");
+          if (playerRef.current.pauseVideo) {
+            playerRef.current.pauseVideo();
+            console.log("pauseVideo() called successfully");
+          } else {
+            console.error("pauseVideo method does not exist!");
+          }
+        } else {
+          console.log("No action needed - states match or buffering");
+        }
+      } catch (e) {
+        console.error("Error syncing player state:", e);
+      }
+    } else {
+      console.log(
+        "Sync effect skipped - playerRef:",
+        !!playerRef.current,
+        "currentVideo:",
+        !!currentVideo
+      );
+    }
+  }, [isPlaying, currentVideo]);
 
   useEffect(() => {
     if (window.YT && currentVideo) {
@@ -88,6 +183,17 @@ export default function VideoPlayer({
           </h3>
           <p className="text-gray-600 text-sm mb-4">{currentVideo.channel}</p>
           <div className="flex items-center gap-4">
+            <button
+              onClick={handlePlayPauseClick}
+              className="bg-blue-600 text-white p-4 rounded-full hover:bg-blue-700 transition"
+              title={isPlaying ? "Pause" : "Play"}
+            >
+              {isPlaying ? (
+                <Pause className="w-6 h-6" />
+              ) : (
+                <Play className="w-6 h-6" />
+              )}
+            </button>
             <button
               onClick={onSkipToNext}
               disabled={queueLength === 0}
