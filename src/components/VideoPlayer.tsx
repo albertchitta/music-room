@@ -40,14 +40,9 @@ export default function VideoPlayer({
     if (window.YT && currentVideo) {
       // Only recreate player if the video ID actually changed
       if (currentVideoIdRef.current === currentVideo.id && playerRef.current) {
-        console.log("VideoPlayer: Same video, not recreating player");
         return;
       }
 
-      console.log(
-        "VideoPlayer: New video, creating player for:",
-        currentVideo.title
-      );
       currentVideoIdRef.current = currentVideo.id;
 
       if (playerRef.current) {
@@ -62,10 +57,8 @@ export default function VideoPlayer({
             event.target.playVideo(); // Automatically start video
           },
           onStateChange: (event: any) => {
-            console.log("VideoPlayer: Player state changed:", event.data);
             // State 0 means video ended
             if (event.data === 0) {
-              console.log("VideoPlayer: Video ended, calling onVideoEnd");
               if (onVideoEndRef.current) {
                 onVideoEndRef.current();
               }

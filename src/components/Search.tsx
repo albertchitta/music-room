@@ -59,9 +59,9 @@ export default function Search({
       {/* Search Results */}
       {searchResults.length > 0 && (
         <div className="space-y-2 max-h-96 overflow-y-auto">
-          {searchResults.map((result) => (
+          {searchResults.map((result, index) => (
             <div
-              key={result.id}
+              key={index}
               className="flex gap-3 p-3 bg-gray-50 rounded-lg hover:bg-purple-50 transition"
             >
               <img
@@ -102,4 +102,3 @@ export default function Search({
     </div>
   );
 }
-
