@@ -112,6 +112,7 @@ export function VideoPlayer({
   currentVideo,
   isPlaying,
   queueLength,
+  playbackBaseSec,
   onTogglePlayPause,
   onSkipToNext,
   onVideoEnd,
@@ -121,6 +122,7 @@ export function VideoPlayer({
   const currentVideoIdRef = useRef<string | null>(null);
   const onVideoEndRef = useRef<(() => void) | undefined>(onVideoEnd);
   const playerReadyRef = useRef<boolean>(false);
+  const hasInitialSeekRef = useRef<boolean>(false);
   const [volume, setVolume] = useState<number>(80);
   const [muted, setMuted] = useState<boolean>(false);
 
@@ -140,6 +142,7 @@ export function VideoPlayer({
       playerReadyRef.current = false;
     }
     currentVideoIdRef.current = currentVideo.id;
+    hasInitialSeekRef.current = false;
 
     playerRef.current = new window.YT.Player("youtube-player", {
       height: "100%",
@@ -160,6 +163,11 @@ export function VideoPlayer({
             if (muted) {
               playerRef.current.mute();
             }
+          }
+          // Seek to current position when joining room
+          if (playbackBaseSec > 0 && !hasInitialSeekRef.current) {
+            playerRef.current.seekTo(playbackBaseSec, true);
+            hasInitialSeekRef.current = true;
           }
           // Auto-play if isPlaying is true
           if (isPlaying && playerRef.current) {
