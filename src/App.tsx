@@ -1,5 +1,23 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { toast } from "sonner";
+import {
+  Music,
+  SkipForward,
+  Search as SearchIcon,
+  Loader,
+  Play,
+  Pause,
+  Volume2,
+  VolumeX,
+  Plus,
+  X,
+  Users,
+  Copy,
+  List,
+} from "lucide-react";
+import { Button } from "./components/ui/button";
+import { Input } from "./components/ui/input";
+import { ButtonGroup } from "./components/ui/button-group";
 import HomeView from "./pages/HomeView";
 import CreateRoomView from "./pages/CreateRoomView";
 import JoinRoomView from "./pages/JoinRoomView";
@@ -31,6 +49,12 @@ declare global {
         seekTo: (seconds: number, allowSeekAhead: boolean) => void;
         getPlayerState: () => number;
         stopVideo: () => void;
+        // volume & mute controls
+        setVolume: (volume: number) => void;
+        getVolume: () => number;
+        mute: () => void;
+        unMute: () => void;
+        isMuted: () => boolean;
       };
       PlayerState: {
         ENDED: number;
@@ -41,6 +65,7 @@ declare global {
 }
 
 interface Member {
+  id?: string;
   name: string;
   joinedAt: number;
 }
@@ -60,30 +85,425 @@ interface YouTubeApiItem {
   };
 }
 
-interface YouTubePlayerEvent {
-  target: {
-    playVideo: () => void;
-    pauseVideo: () => void;
-    seekTo: (seconds: number, allowSeekAhead: boolean) => void;
-  };
-}
-
-interface YouTubeStateChangeEvent {
-  data: number;
-}
-
 interface SearchResult {
   id: string;
   title: string;
   thumbnail: string;
   channel: string;
-  timestamp?: number; // Optional timestamp for video position
 }
 
 interface QueueItem extends SearchResult {
   addedBy?: string;
   addedAt?: number;
-  timestamp?: number;
+}
+
+interface VideoPlayerProps {
+  currentVideo: QueueItem | null;
+  isPlaying: boolean;
+  queueLength: number;
+  playbackBaseSec: number;
+  playbackStartedAtMs: number | null;
+  onTogglePlayPause: () => void;
+  onSkipToNext: () => void;
+  onVideoEnd?: () => void;
+}
+
+export function VideoPlayer({
+  currentVideo,
+  isPlaying,
+  queueLength,
+  onTogglePlayPause,
+  onSkipToNext,
+  onVideoEnd,
+}: VideoPlayerProps) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const playerRef = useRef<any>(null);
+  const currentVideoIdRef = useRef<string | null>(null);
+  const onVideoEndRef = useRef<(() => void) | undefined>(onVideoEnd);
+  const playerReadyRef = useRef<boolean>(false);
+  const [volume, setVolume] = useState<number>(80);
+  const [muted, setMuted] = useState<boolean>(false);
+
+  // Keep callback refs fresh
+  useEffect(() => {
+    onVideoEndRef.current = onVideoEnd;
+  }, [onVideoEnd]);
+
+  // Create/destroy player when video changes
+  useEffect(() => {
+    if (!window.YT || !currentVideo) return;
+    if (currentVideoIdRef.current === currentVideo.id && playerRef.current) {
+      return;
+    }
+    if (playerRef.current) {
+      playerRef.current.destroy();
+      playerReadyRef.current = false;
+    }
+    currentVideoIdRef.current = currentVideo.id;
+
+    playerRef.current = new window.YT.Player("youtube-player", {
+      height: "100%",
+      width: "100%",
+      videoId: currentVideo.id,
+      playerVars: {
+        playsinline: 1,
+        autoplay: 0,
+        controls: 0,
+        disablekb: 1,
+      },
+      events: {
+        onReady: () => {
+          playerReadyRef.current = true;
+          // Apply initial volume
+          if (playerRef.current) {
+            playerRef.current.setVolume(volume);
+            if (muted) {
+              playerRef.current.mute();
+            }
+          }
+          // Auto-play if isPlaying is true
+          if (isPlaying && playerRef.current) {
+            playerRef.current.playVideo();
+          }
+        },
+        onStateChange: (event: { data: number }) => {
+          if (event.data === 0) {
+            // Video ended
+            onVideoEndRef.current?.();
+          }
+        },
+      },
+    });
+
+    return () => {
+      if (playerRef.current) {
+        playerRef.current.destroy();
+        playerRef.current = null;
+        playerReadyRef.current = false;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentVideo?.id]);
+
+  // Apply play/pause state
+  useEffect(() => {
+    if (!playerRef.current || !currentVideo || !playerReadyRef.current) return;
+
+    if (isPlaying) {
+      playerRef.current.playVideo();
+    } else {
+      playerRef.current.pauseVideo();
+    }
+  }, [isPlaying, currentVideo]);
+
+  // Apply volume changes
+  useEffect(() => {
+    if (!playerRef.current || !playerReadyRef.current) return;
+    playerRef.current.setVolume(volume);
+  }, [volume]);
+
+  // Apply mute changes
+  useEffect(() => {
+    if (!playerRef.current || !playerReadyRef.current) return;
+    if (muted) {
+      playerRef.current.mute();
+    } else {
+      playerRef.current.unMute();
+    }
+  }, [muted]);
+
+  return (
+    <div className="bg-white rounded-2xl shadow-xl p-6">
+      {currentVideo ? (
+        <div>
+          <div
+            id="youtube-player"
+            className="aspect-video bg-black rounded-lg mb-4"
+          ></div>
+          <h3 className="text-xl font-bold text-gray-800 mb-2">
+            {currentVideo.title}
+          </h3>
+          <p className="text-gray-600 text-sm mb-4">{currentVideo.channel}</p>
+
+          <div className="flex items-center gap-4">
+            <button
+              onClick={onTogglePlayPause}
+              className="bg-blue-600 text-white p-4 rounded-full hover:bg-blue-700 transition"
+              title={isPlaying ? "Pause" : "Play"}
+              aria-label={isPlaying ? "Pause" : "Play"}
+            >
+              {isPlaying ? (
+                <Pause className="w-6 h-6" />
+              ) : (
+                <Play className="w-6 h-6" />
+              )}
+            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setMuted((m) => !m)}
+                className="bg-gray-100 text-gray-800 p-3 rounded-full hover:bg-gray-200 transition"
+                title={muted ? "Unmute" : "Mute"}
+                aria-label={muted ? "Unmute" : "Mute"}
+              >
+                {muted || volume === 0 ? (
+                  <VolumeX className="w-5 h-5" />
+                ) : (
+                  <Volume2 className="w-5 h-5" />
+                )}
+              </button>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={volume}
+                onChange={(e) => setVolume(Number(e.target.value))}
+                className="w-32 accent-blue-600"
+              />
+            </div>
+            <button
+              onClick={onSkipToNext}
+              disabled={queueLength === 0}
+              className="bg-blue-600 text-white p-4 rounded-full hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+              title={queueLength === 0 ? "No songs in queue" : "Skip to next"}
+            >
+              <SkipForward className="w-6 h-6" />
+            </button>
+          </div>
+          <p className="text-xs text-gray-500 mt-2">
+            {queueLength > 0
+              ? `${queueLength} song${queueLength === 1 ? "" : "s"} in queue`
+              : "No songs in queue"}
+          </p>
+        </div>
+      ) : (
+        <div className="aspect-video bg-gray-100 rounded-lg flex items-center justify-center">
+          <div className="text-center">
+            <Music className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+            <p className="text-gray-600">No video playing</p>
+            <p className="text-sm text-gray-500">Search for a song below</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface SearchProps {
+  searchQuery: string;
+  onSearchQueryChange: (value: string) => void;
+  isSearching: boolean;
+  searchResults: SearchResult[];
+  onSearch: () => void;
+  onAddToQueue: (video: SearchResult, playNow: boolean) => void;
+}
+
+export function Search({
+  searchQuery,
+  onSearchQueryChange,
+  isSearching,
+  searchResults,
+  onSearch,
+  onAddToQueue,
+}: SearchProps) {
+  return (
+    <div className="bg-white rounded-2xl shadow-xl p-6">
+      <h3 className="text-xl font-bold text-gray-800 mb-4">Search YouTube</h3>
+      <ButtonGroup className="w-full">
+        <Input
+          type="text"
+          value={searchQuery}
+          onChange={(e) => onSearchQueryChange(e.target.value)}
+          onKeyUp={(e) => e.key === "Enter" && onSearch()}
+          placeholder="Search for a song..."
+          className="h-10"
+        />
+        <Button
+          onClick={onSearch}
+          disabled={isSearching}
+          size="lg"
+          variant="outline"
+          aria-label="Search"
+        >
+          {isSearching ? (
+            <Loader className="w-5 h-5 animate-spin" />
+          ) : (
+            <SearchIcon className="w-5 h-5" />
+          )}
+          Search
+        </Button>
+      </ButtonGroup>
+
+      {/* Search Results */}
+      {searchResults.length > 0 && (
+        <div className="space-y-2 max-h-96 overflow-y-auto">
+          {searchResults.map((result, index) => (
+            <div
+              key={index}
+              className="flex gap-3 p-3 bg-gray-50 rounded-lg hover:bg-purple-50 transition"
+            >
+              <img
+                src={result.thumbnail}
+                alt={result.title}
+                className="w-32 h-20 object-cover rounded shrink-0"
+              />
+              <div className="flex-1 min-w-0">
+                <h4 className="font-semibold text-gray-800 truncate">
+                  {result.title}
+                </h4>
+                <p className="text-sm text-gray-600 truncate">
+                  {result.channel}
+                </p>
+              </div>
+              <div className="flex flex-col gap-2 shrink-0">
+                <button
+                  onClick={() => onAddToQueue(result, true)}
+                  className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition flex items-center gap-2 text-sm"
+                  title="Play now"
+                >
+                  <Play className="w-4 h-4" />
+                  Play
+                </button>
+                <button
+                  onClick={() => onAddToQueue(result, false)}
+                  className="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition flex items-center gap-2 text-sm"
+                  title="Add to queue"
+                >
+                  <Plus className="w-4 h-4" />
+                  Queue
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface QueueProps {
+  queue: QueueItem[];
+  onRemoveFromQueue: (index: number) => void;
+}
+
+export function Queue({ queue, onRemoveFromQueue }: QueueProps) {
+  return (
+    <div className="bg-white rounded-2xl shadow-xl p-6">
+      <h3 className="text-xl font-bold text-gray-800 mb-4">
+        Queue ({queue.length})
+      </h3>
+      {queue.length === 0 ? (
+        <p className="text-gray-500 text-sm text-center py-8">
+          No songs in queue
+        </p>
+      ) : (
+        <div className="space-y-2 max-h-96 overflow-y-auto">
+          {queue.map((song, index) => (
+            <div key={index} className="bg-gray-50 rounded-lg p-3">
+              <div className="flex gap-2 mb-2">
+                <img
+                  src={song.thumbnail}
+                  alt={song.title}
+                  className="w-16 h-12 object-cover rounded shrink-0"
+                />
+                <div className="flex-1 min-w-0">
+                  <h4 className="font-semibold text-sm text-gray-800 truncate">
+                    {song.title}
+                  </h4>
+                  <p className="text-xs text-gray-600 truncate">
+                    {song.channel}
+                  </p>
+                </div>
+                <button
+                  onClick={() => onRemoveFromQueue(index)}
+                  className="text-red-600 hover:text-red-700 shrink-0"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <p className="text-xs text-gray-500">Added by {song.addedBy}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface MembersProps {
+  members: Member[];
+}
+
+export function Members({ members }: MembersProps) {
+  return (
+    <div className="bg-white rounded-2xl shadow-xl p-6">
+      <div className="flex items-center gap-2 mb-4">
+        <Users className="w-6 h-6 text-purple-600" />
+        <h3 className="text-xl font-bold text-gray-800">
+          Members ({members.length})
+        </h3>
+      </div>
+      <div className="space-y-2">
+        {members.map((member, index) => (
+          <div
+            key={member.id ?? `${member.name}-${member.joinedAt}-${index}`}
+            className="bg-gray-50 rounded-lg p-3 flex items-center gap-3"
+          >
+            <div className="w-10 h-10 bg-purple-600 rounded-full flex items-center justify-center text-white font-bold">
+              {member.name.charAt(0).toUpperCase()}
+            </div>
+            <span className="text-gray-800 font-medium">{member.name}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+interface HeaderProps {
+  roomId: string;
+  memberCount: number;
+  queueLength: number;
+  onCopyRoomId: () => void;
+  onToggleQueue: () => void;
+  onLeaveRoom: () => void;
+}
+
+export function Header({
+  roomId,
+  memberCount,
+  queueLength,
+  onCopyRoomId,
+  onToggleQueue,
+  onLeaveRoom,
+}: HeaderProps) {
+  return (
+    <div className="bg-white rounded-2xl shadow-xl p-6 mb-4">
+      <div className="flex items-center justify-between flex-wrap gap-4">
+        <div>
+          <div className="flex align-middle space-x-2">
+            <h1 className="text-2xl font-bold text-gray-800">Room: {roomId}</h1>
+            <Button onClick={onCopyRoomId} variant="ghost">
+              <Copy className="w-4 h-4" />
+            </Button>
+          </div>
+          <p className="text-gray-600">
+            Listening with {memberCount}{" "}
+            {memberCount === 1 ? "person" : "people"}
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <Button onClick={onToggleQueue} size="lg">
+            <List className="w-4 h-4" />
+            Queue ({queueLength})
+          </Button>
+          <Button onClick={onLeaveRoom} size="lg" variant="destructive">
+            Leave
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default function MusicRoom() {
@@ -103,16 +523,27 @@ export default function MusicRoom() {
   const [joinRoomId, setJoinRoomId] = useState<string>("");
   const [isSearching, setIsSearching] = useState<boolean>(false);
   const [showQueue, setShowQueue] = useState<boolean>(false);
-  const playerRef = useRef<InstanceType<typeof window.YT.Player>>(null);
-  const [playerReady, setPlayerReady] = useState<boolean>(false);
+  const [playbackBaseSec, setPlaybackBaseSec] = useState<number>(0);
+  const [playbackStartedAtMs, setPlaybackStartedAtMs] = useState<number | null>(
+    null
+  );
   const wsRef = useRef<WebSocket | null>(null);
 
   // Refs to store the latest callback functions for YouTube player events
   const playNextInQueueRef = useRef<(() => Promise<void>) | null>(null);
-  const updatePlayingStateRef = useRef<
-    ((playing: boolean) => Promise<void>) | null
-  >(null);
-  const lastPlayerStateRef = useRef<number>(-1);
+
+  // Load the YouTube IFrame API once
+  useEffect(() => {
+    if (!window.YT) {
+      const tag = document.createElement("script");
+      tag.src = "https://www.youtube.com/iframe_api";
+      const firstScriptTag = document.getElementsByTagName("script")[0];
+      firstScriptTag?.parentNode?.insertBefore(tag, firstScriptTag);
+    }
+    window.onYouTubeIframeAPIReady = () => {
+      // API is ready, VideoPlayer will check for window.YT
+    };
+  }, []);
 
   // Wait for a WebSocket to open (or timeout)
   const waitForWsOpen = useCallback(
@@ -166,24 +597,21 @@ export default function MusicRoom() {
       try {
         socket.onopen = () => {
           try {
-            if (subscribeRoomId) {
+            const targetRoom = subscribeRoomId || roomId;
+            const targetUser = subscribeUserName || userName;
+            if (targetRoom) {
               socket.send(
                 JSON.stringify({
                   type: "subscribe",
-                  roomId: subscribeRoomId,
-                  userName: subscribeUserName,
+                  roomId: targetRoom,
+                  userName: targetUser,
                 })
-              );
-            } else if (roomId) {
-              socket.send(
-                JSON.stringify({ type: "subscribe", roomId, userName })
               );
             }
           } catch (e) {
             console.error("WS send error on open:", e);
           }
         };
-
         socket.onmessage = (evt) => {
           try {
             const msg = JSON.parse(evt.data);
@@ -194,34 +622,35 @@ export default function MusicRoom() {
               const s = msg.state || {};
               setMembers(s.members || []);
               setQueue(s.queue || []);
-
-              // Only update currentVideo if it actually changed (compare video ID)
+              // derive absolute position at server time to avoid clock skew
+              const serverNow =
+                typeof s.serverNowMs === "number" ? s.serverNowMs : Date.now();
+              let positionAtServerNow: number;
+              if (typeof s.positionSec === "number") {
+                positionAtServerNow = s.positionSec;
+              } else {
+                const base = Number(s.playheadPositionSec || 0);
+                positionAtServerNow =
+                  base +
+                  (s.startedAtMs ? (serverNow - s.startedAtMs) / 1000 : 0);
+              }
+              setPlaybackBaseSec(positionAtServerNow);
+              // Always project from server time; local pause disables corrections
+              setPlaybackStartedAtMs(serverNow);
               setCurrentVideo((prevVideo) => {
                 const newVideo = s.currentVideo || null;
-                // If both are null, no change
                 if (!prevVideo && !newVideo) return prevVideo;
-                // If one is null and other isn't, it changed
                 if (!prevVideo || !newVideo) return newVideo;
-                // If same video ID and timestamp is close (within 1 second), keep previous reference
-                if (
-                  prevVideo.id === newVideo.id &&
-                  Math.abs(
-                    (prevVideo.timestamp || 0) - (newVideo.timestamp || 0)
-                  ) < 1
-                ) {
-                  return prevVideo;
-                }
-                // Otherwise, it's a real change
+                if (prevVideo.id === newVideo.id) return newVideo;
                 return newVideo;
               });
-
+              // Sync playing state from server
               setIsPlaying(!!s.playing);
             }
           } catch (e) {
             console.error("WS message parse error:", e);
           }
         };
-
         socket.onclose = () => {
           if (wsRef.current === socket) wsRef.current = null;
         };
@@ -231,276 +660,6 @@ export default function MusicRoom() {
     },
     [roomId, userName]
   );
-
-  // Loads the IFrame API code asynchronously.
-  useEffect(() => {
-    if (!window.YT) {
-      const tag = document.createElement("script");
-      tag.src = "https://www.youtube.com/iframe_api";
-      const firstScriptTag = document.getElementsByTagName("script")[0];
-      firstScriptTag.parentNode?.insertBefore(tag, firstScriptTag);
-    }
-
-    window.onYouTubeIframeAPIReady = () => {
-      setPlayerReady(true);
-    };
-  }, []);
-
-  // Creates an <iframe> (and YouTube player) after the API code downloads.
-  // Creates an <iframe> (and YouTube player) after the API code downloads.
-  const initializePlayer = useCallback(
-    (videoId: string) => {
-      if (!window.YT || !window.YT.Player) {
-        return;
-      }
-
-      if (playerRef.current) {
-        return;
-      }
-
-      const container = document.getElementById("youtube-player");
-      if (!container) {
-        return;
-      }
-
-      // Clear any existing content in case there's a stale iframe
-      container.innerHTML = "";
-
-      playerRef.current = new window.YT.Player("youtube-player", {
-        height: "100%",
-        width: "100%",
-        videoId: videoId,
-        playerVars: {
-          autoplay: 1,
-          controls: 1,
-          modestbranding: 1,
-          rel: 0,
-        },
-        events: {
-          onReady: (event: YouTubePlayerEvent) => {
-            // Initialize with current state
-            try {
-              // Ensure currentVideo exists before using it
-              if (currentVideo?.timestamp) {
-                event.target.seekTo(currentVideo.timestamp, true);
-              }
-              if (isPlaying) {
-                event.target.playVideo();
-              } else {
-                event.target.pauseVideo();
-              }
-              // Signal that player is ready
-              setPlayerReady(true);
-            } catch (e) {
-              console.error("Error initializing player:", e);
-            }
-          },
-          onStateChange: async (event: YouTubeStateChangeEvent) => {
-            // Handle all player state changes
-            switch (event.data) {
-              case -1: // unstarted
-                break;
-              case 0: // ended
-                if (playNextInQueueRef.current) {
-                  await playNextInQueueRef.current();
-                }
-                break;
-              case 1: // playing
-                if (updatePlayingStateRef.current) {
-                  await updatePlayingStateRef.current(true);
-                }
-                break;
-              case 2: // paused
-                if (updatePlayingStateRef.current) {
-                  await updatePlayingStateRef.current(false);
-                }
-                break;
-              case 3: // buffering
-                break;
-              case 5: // video cued
-                break;
-            }
-          },
-        },
-      });
-    },
-    [isPlaying, currentVideo]
-  );
-
-  // Handle user leaving the page
-  useEffect(() => {
-    if (roomId && userName) {
-      window.addEventListener("beforeunload", leaveRoom);
-      return () => {
-        window.removeEventListener("beforeunload", leaveRoom);
-      };
-    }
-  }, [roomId, userName]);
-
-  // Update timestamp periodically via WebSocket and monitor for video end
-  useEffect(() => {
-    if (
-      roomId &&
-      currentVideo &&
-      isPlaying &&
-      playerRef.current &&
-      wsRef.current?.readyState === WebSocket.OPEN
-    ) {
-      const updateTimestamp = () => {
-        if (!playerRef.current) {
-          return;
-        }
-
-        const currentTime = playerRef.current.getCurrentTime?.();
-        const duration = playerRef.current.getDuration?.();
-
-        if (
-          currentTime !== undefined &&
-          duration !== undefined &&
-          duration > 0
-        ) {
-          try {
-            wsRef.current?.send(
-              JSON.stringify({
-                type: "updateTimestamp",
-                roomId,
-                state: {
-                  currentVideo: { ...currentVideo, timestamp: currentTime },
-                },
-              })
-            );
-          } catch (e) {
-            console.error("Failed to send timestamp:", e);
-          }
-
-          // Check if video has ended by comparing current time to duration
-          if (currentTime >= duration - 0.5) {
-            if (
-              playNextInQueueRef.current &&
-              lastPlayerStateRef.current !== 0
-            ) {
-              lastPlayerStateRef.current = 0; // Prevent multiple calls
-              playNextInQueueRef.current();
-            }
-          }
-        }
-      };
-
-      const interval = setInterval(updateTimestamp, 1000);
-      return () => clearInterval(interval);
-    }
-  }, [roomId, currentVideo, isPlaying]);
-
-  // WebSocket connection to sync rooms across devices
-  useEffect(() => {
-    if (roomId && view === "room") {
-      const wsUrl =
-        (import.meta.env.VITE_WS_URL as string) || "ws://localhost:3001";
-
-      // If a socket already exists (for example created during join flow), reuse it
-      if (wsRef.current) {
-        // Ensure subscription is sent for this room
-        try {
-          if (wsRef.current.readyState === WebSocket.OPEN) {
-            wsRef.current.send(
-              JSON.stringify({ type: "subscribe", roomId, userName })
-            );
-          } else {
-            // Attach handlers in case it was created externally
-            attachSocketHandlers(wsRef.current, roomId, userName);
-          }
-        } catch (e) {
-          console.error("WS reuse error:", e);
-        }
-        return;
-      }
-
-      // Otherwise create a new WebSocket
-      try {
-        wsRef.current = new WebSocket(wsUrl);
-      } catch (e) {
-        console.error("WebSocket connection error:", e);
-        return;
-      }
-
-      attachSocketHandlers(wsRef.current, roomId, userName);
-
-      return () => {
-        if (wsRef.current) {
-          try {
-            wsRef.current.send(
-              JSON.stringify({ type: "leave", roomId, userName })
-            );
-          } catch (e) {
-            console.error(e);
-          }
-          wsRef.current.close();
-          wsRef.current = null;
-        }
-      };
-    }
-  }, [roomId, view, userName, attachSocketHandlers]);
-
-  // Sync player with room state
-  useEffect(() => {
-    // Only proceed if we're in the room view
-    if (view !== "room") return;
-
-    // If we need to create the player
-    if (currentVideo && playerReady && !playerRef.current) {
-      const container = document.getElementById("youtube-player");
-      if (!container) {
-        console.log("Player container not mounted yet");
-        // Wait for container to be available
-        const checkInterval = setInterval(() => {
-          if (document.getElementById("youtube-player")) {
-            clearInterval(checkInterval);
-            initializePlayer(currentVideo.id);
-          }
-        }, 100);
-        return () => clearInterval(checkInterval);
-      }
-      initializePlayer(currentVideo.id);
-      return;
-    }
-
-    // If player exists, sync with room state
-    if (playerRef.current && currentVideo && playerReady) {
-      try {
-        const currentVideoId = playerRef.current.getVideoData?.().video_id;
-
-        // Load new video if different
-        if (currentVideoId !== currentVideo.id) {
-          playerRef.current.loadVideoById({
-            videoId: currentVideo.id,
-            startSeconds: currentVideo.timestamp || 0,
-          });
-          return;
-        }
-
-        // Sync timestamp (only when video is playing)
-        if (isPlaying) {
-          const currentTime = playerRef.current.getCurrentTime?.();
-          if (
-            currentVideo.timestamp !== undefined &&
-            Math.abs(currentTime - currentVideo.timestamp) > 2
-          ) {
-            playerRef.current.seekTo?.(currentVideo.timestamp, true);
-          }
-        }
-
-        // Sync play/pause state
-        const playerState = playerRef.current.getPlayerState?.();
-        if (isPlaying && playerState !== 1) {
-          playerRef.current.playVideo?.();
-        } else if (!isPlaying && playerState === 1) {
-          playerRef.current.pauseVideo?.();
-        }
-      } catch (e) {
-        console.error("Error syncing player state:", e);
-      }
-    }
-  }, [currentVideo, isPlaying, playerReady, view, initializePlayer]);
 
   const generateRoomId = () => {
     return Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -566,6 +725,10 @@ export default function MusicRoom() {
         queue?: QueueItem[];
         currentVideo?: QueueItem | null;
         playing?: boolean;
+        playheadPositionSec?: number;
+        startedAtMs?: number | null;
+        positionSec?: number;
+        serverNowMs?: number;
       };
 
       const roomState = await new Promise<RoomStateServer | null>((resolve) => {
@@ -640,6 +803,25 @@ export default function MusicRoom() {
       setMembers(roomState.members || []);
       setQueue(roomState.queue || []);
       setCurrentVideo(roomState.currentVideo || null);
+      const serverNow =
+        typeof roomState.serverNowMs === "number"
+          ? roomState.serverNowMs
+          : Date.now();
+      let positionAtServerNow: number;
+      if (typeof roomState.positionSec === "number") {
+        positionAtServerNow = roomState.positionSec;
+      } else {
+        const base = Number(roomState.playheadPositionSec || 0);
+        positionAtServerNow =
+          base +
+          (roomState.startedAtMs
+            ? (serverNow - roomState.startedAtMs) / 1000
+            : 0);
+      }
+      setPlaybackBaseSec(positionAtServerNow);
+      // Always project from server time; local pause disables corrections
+      setPlaybackStartedAtMs(serverNow);
+      // Sync initial playing state from server
       setIsPlaying(!!roomState.playing);
       setView("room");
     } catch (error) {
@@ -763,57 +945,30 @@ export default function MusicRoom() {
           return;
         }
 
+        const videoToPlay = { ...video };
+
         // Send video update to server
         wsRef.current.send(
           JSON.stringify({
             type: "updateVideo",
             roomId,
-            state: { currentVideo: video },
-          })
-        );
-
-        // Send playing state update
-        wsRef.current.send(
-          JSON.stringify({
-            type: "updatePlaying",
-            roomId,
-            state: { playing: true },
+            state: { currentVideo: videoToPlay },
           })
         );
 
         // Update local UI state
-        setCurrentVideo(video);
+        setCurrentVideo(videoToPlay);
         setIsPlaying(true);
         setSearchResults([]);
         setSearchQuery("");
 
-        // Initialize or update player
-        if (!playerRef.current && playerReady) {
-          initializePlayer(video.id);
-        } else if (playerRef.current) {
-          // Use timestamp from video object if it exists, otherwise start at 0
-          try {
-            playerRef.current.loadVideoById({
-              videoId: video.id,
-              startSeconds: Math.floor(video.timestamp || 0),
-            });
-            // Reset the last player state when loading a new video
-            lastPlayerStateRef.current = -1;
-            setTimeout(() => {
-              if (playerRef.current && playerRef.current.playVideo) {
-                playerRef.current.playVideo();
-              }
-            }, 300);
-          } catch (error) {
-            console.error("Error loading video in player:", error);
-          }
-        }
+        // VideoPlayer will pick up state changes and load/play the video
       } catch (error) {
         console.error("Error playing video:", error);
         toast.error(`Error playing video: ${error}`);
       }
     },
-    [roomId, playerReady, initializePlayer]
+    [roomId]
   );
 
   const removeFromQueue = async (index: number) => {
@@ -844,16 +999,65 @@ export default function MusicRoom() {
 
   const skipToNext = async () => {
     if (!roomId) return;
-
-    try {
-      await playNextInQueue();
-    } catch (error) {
-      console.error("Error skipping:", error);
-      toast.error(`Error skipping to next song: ${error}`);
-    }
+    await playNextInQueue();
   };
 
   const playNextInQueue = useCallback(async () => {
+    if (!queue || queue.length === 0) {
+      // No more songs in queue
+      wsRef.current?.send(
+        JSON.stringify({
+          type: "updateVideo",
+          roomId,
+          state: { currentVideo: null },
+        })
+      );
+      // When no video, also ensure playing is false
+      wsRef.current?.send(
+        JSON.stringify({
+          type: "updatePlaying",
+          roomId,
+          state: { playing: false },
+        })
+      );
+
+      setCurrentVideo(null);
+      setIsPlaying(false);
+      return;
+    }
+
+    // Get the next video
+    const nextVideo = {
+      ...queue[0],
+    };
+
+    // Send video update to server
+    wsRef.current?.send(
+      JSON.stringify({
+        type: "updateVideo",
+        roomId,
+        state: { currentVideo: nextVideo },
+      })
+    );
+
+    // Update local UI state
+    setCurrentVideo(nextVideo);
+    setIsPlaying(true);
+
+    // Remove from queue
+    const updatedQueue = queue.slice(1);
+    wsRef.current?.send(
+      JSON.stringify({
+        type: "updateQueue",
+        roomId,
+        state: { queue: updatedQueue },
+      })
+    );
+
+    setQueue(updatedQueue);
+  }, [queue, roomId]);
+
+  const togglePlayPause = async () => {
     try {
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
         console.error("No WebSocket connection");
@@ -861,134 +1065,29 @@ export default function MusicRoom() {
         return;
       }
 
-      if (!queue || queue.length === 0) {
-        // No more songs in queue
-        wsRef.current.send(
-          JSON.stringify({
-            type: "updateVideo",
-            roomId,
-            state: { currentVideo: null },
-          })
-        );
-        wsRef.current.send(
-          JSON.stringify({
-            type: "updatePlaying",
-            roomId,
-            state: { playing: false },
-          })
-        );
+      const newPlayingState = !isPlaying;
 
-        // Update local state
-        setCurrentVideo(null);
-        setIsPlaying(false);
-
-        if (playerRef.current) {
-          playerRef.current.stopVideo?.();
-        }
-        return;
-      }
-
-      // Get the next video but don't remove it yet
-      const nextVideo = {
-        ...queue[0],
-        timestamp: 0, // Force timestamp to 0 for next video
-      };
-
-      // Start playing the next video (this will send video and playing state updates)
-      await playVideo(nextVideo);
-
-      // After starting playback, remove it from the queue
-      const updatedQueue = queue.slice(1);
-
+      // Send playing state update to server
       wsRef.current.send(
         JSON.stringify({
-          type: "updateQueue",
+          type: "updatePlaying",
           roomId,
-          state: { queue: updatedQueue },
+          state: { playing: newPlayingState },
         })
       );
 
-      // Optimistically update local queue
-      setQueue(updatedQueue);
-    } catch (error) {
-      console.error("Error playing next video:", error);
-    }
-  }, [queue, roomId, playVideo]);
-
-  const togglePlayPause = async () => {
-    try {
-      // Update the playing state via WebSocket
-      // The VideoPlayer component will handle the actual player control
-      await updatePlayingState(!isPlaying);
+      // Optimistically update local state
+      setIsPlaying(newPlayingState);
     } catch (error) {
       console.error("Error toggling play/pause:", error);
       toast.error("Error controlling playback");
     }
   };
 
-  const handleSeek = useCallback(
-    async (timestamp: number) => {
-      try {
-        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-          console.error("No WebSocket connection");
-          return;
-        }
-
-        if (!currentVideo) {
-          return;
-        }
-
-        // Send the new timestamp to sync with other members
-        wsRef.current.send(
-          JSON.stringify({
-            type: "updateTimestamp",
-            roomId,
-            state: {
-              currentVideo: { ...currentVideo, timestamp },
-            },
-          })
-        );
-      } catch (error) {
-        console.error("Error sending seek position:", error);
-      }
-    },
-    [roomId, currentVideo]
-  );
-
-  const updatePlayingState = useCallback(
-    async (playing: boolean) => {
-      try {
-        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-          console.error("No WebSocket connection");
-          return;
-        }
-
-        wsRef.current.send(
-          JSON.stringify({
-            type: "updatePlaying",
-            roomId,
-            state: { playing },
-          })
-        );
-
-        // Optimistically update local state
-        setIsPlaying(playing);
-      } catch (error) {
-        console.error("Error updating playback state:", error);
-        toast.error("Failed to update playback state");
-      }
-    },
-    [roomId]
-  );
-
   // Keep the refs updated with the latest callback functions
   useEffect(() => {
     playNextInQueueRef.current = playNextInQueue;
   }, [playNextInQueue]);
-
-  useEffect(() => {
-    updatePlayingStateRef.current = updatePlayingState;
-  }, [updatePlayingState]);
 
   const copyRoomId = () => {
     navigator.clipboard.writeText(roomId);
@@ -996,12 +1095,6 @@ export default function MusicRoom() {
   };
 
   const leaveRoom = useCallback(async () => {
-    // Cleanup player if it exists
-    if (playerRef.current) {
-      playerRef.current.destroy();
-      playerRef.current = null;
-    }
-
     // Notify server and close socket
     try {
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -1022,6 +1115,16 @@ export default function MusicRoom() {
     setQueue([]);
     setSearchQuery("");
   }, [roomId, userName]);
+
+  // Handle user leaving the page
+  useEffect(() => {
+    if (roomId && userName) {
+      window.addEventListener("beforeunload", leaveRoom);
+      return () => {
+        window.removeEventListener("beforeunload", leaveRoom);
+      };
+    }
+  }, [roomId, userName, leaveRoom]);
 
   // Home View
   if (view === "home") {
@@ -1067,6 +1170,8 @@ export default function MusicRoom() {
       queue={queue}
       currentVideo={currentVideo}
       isPlaying={isPlaying}
+      playbackBaseSec={playbackBaseSec}
+      playbackStartedAtMs={playbackStartedAtMs}
       showQueue={showQueue}
       searchQuery={searchQuery}
       isSearching={isSearching}
@@ -1081,7 +1186,6 @@ export default function MusicRoom() {
       onTogglePlayPause={togglePlayPause}
       onSkipToNext={skipToNext}
       onVideoEnd={playNextInQueue}
-      onSeek={handleSeek}
     />
   );
 }

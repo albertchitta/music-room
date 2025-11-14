@@ -1,5 +1,9 @@
 import { WebSocketServer } from "ws";
 
+function genId() {
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
 const PORT = process.env.PORT || 3001;
 const wss = new WebSocketServer({ port: PORT });
 
@@ -7,10 +11,13 @@ const wss = new WebSocketServer({ port: PORT });
 // rooms: Map roomId -> {
 //   clients: Set(ws),
 //   state: {
-//     members: Array<{name: string, joinedAt: number}>,
-//     currentVideo: {id: string, title: string, thumbnail: string, channel: string, timestamp?: number} | null,
+//     members: Array<{id: string, name: string, joinedAt: number}>,
+//     currentVideo: {id: string, title: string, thumbnail: string, channel: string} | null,
 //     queue: Array<{id: string, title: string, thumbnail: string, channel: string, addedBy?: string, addedAt?: number}>,
-//     playing: boolean
+//     playing: boolean,
+//     // sync timing
+//     playheadPositionSec: number, // accumulated position when paused
+//     startedAtMs: number | null // wall-clock when playback started/resumed
 //   }
 // }
 const rooms = new Map();
@@ -32,6 +39,30 @@ function broadcast(roomId, message, exclude) {
   }
 }
 
+function buildStatePayload(roomId) {
+  const room = rooms.get(roomId);
+  if (!room)
+    return {
+      members: [],
+      currentVideo: null,
+      queue: [],
+      playing: false,
+      playheadPositionSec: 0,
+      startedAtMs: null,
+      positionSec: 0,
+      serverNowMs: Date.now(),
+    };
+  const now = Date.now();
+  const base = Number(room.state.playheadPositionSec || 0);
+  const started = room.state.startedAtMs;
+  const positionSec = started ? base + (now - started) / 1000 : base;
+  return {
+    ...room.state,
+    positionSec,
+    serverNowMs: now,
+  };
+}
+
 wss.on("connection", (ws) => {
   ws.on("message", (raw) => {
     let msg;
@@ -48,7 +79,14 @@ wss.on("connection", (ws) => {
     if (!rooms.has(roomId)) {
       rooms.set(roomId, {
         clients: new Set(),
-        state: { members: [], currentVideo: null, queue: [], playing: false },
+        state: {
+          members: [],
+          currentVideo: null,
+          queue: [],
+          playing: false,
+          playheadPositionSec: 0,
+          startedAtMs: null,
+        },
       });
     }
 
@@ -59,64 +97,105 @@ wss.on("connection", (ws) => {
         room.clients.add(ws);
         // associate this ws with the userName for cleanup on close
         if (userName) ws.userName = userName;
-        // add member if not exists
-        if (userName) {
-          const exists = room.state.members.find((m) => m.name === userName);
-          if (!exists) {
-            room.state.members.push({ name: userName, joinedAt: Date.now() });
-          }
+        // assign a unique member id per connection
+        if (!ws.memberId) ws.memberId = genId();
+        // idempotent add: if this socket already added a member, don't add again
+        const alreadyMember = room.state.members.some(
+          (m) => m.id === ws.memberId
+        );
+        if (userName && !alreadyMember) {
+          room.state.members.push({
+            id: ws.memberId,
+            name: userName,
+            joinedAt: Date.now(),
+          });
         }
         // send current room state to new client
         ws.send(
-          JSON.stringify({ type: "room_state", roomId, state: room.state })
+          JSON.stringify({
+            type: "room_state",
+            roomId,
+            state: buildStatePayload(roomId),
+          })
         );
         // broadcast updated members to others
         broadcast(
           roomId,
-          { type: "room_state", roomId, state: room.state },
+          { type: "room_state", roomId, state: buildStatePayload(roomId) },
           ws
         );
         break;
 
       case "leave":
-        // remove member
-        if (userName) {
+        // remove the member corresponding to this socket only
+        if (ws.memberId) {
           room.state.members = room.state.members.filter(
-            (m) => m.name !== userName
+            (m) => m.id !== ws.memberId
           );
         }
         // broadcast
-        broadcast(roomId, { type: "room_state", roomId, state: room.state });
+        broadcast(roomId, {
+          type: "room_state",
+          roomId,
+          state: buildStatePayload(roomId),
+        });
         break;
 
-      case "updateTimestamp":
-        if (
-          state?.currentVideo?.timestamp !== undefined &&
-          room.state.currentVideo
-        ) {
-          room.state.currentVideo.timestamp = state.currentVideo.timestamp;
-          // Don't broadcast timestamp updates to reduce network traffic
-        }
-        break;
+      // Removed timestamp/seek handling
 
       case "updatePlaying":
         if (state?.playing !== undefined) {
-          room.state.playing = state.playing;
-          broadcast(roomId, { type: "room_state", roomId, state: room.state });
+          const desired = !!state.playing;
+          // No-op: if state is already desired, avoid rebroadcast/timing changes
+          if (room.state.playing === desired) break;
+          const now = Date.now();
+          if (desired) {
+            // resume: set startedAt based on current base position
+            if (!room.state.startedAtMs) {
+              room.state.startedAtMs =
+                now - Math.floor(room.state.playheadPositionSec * 1000);
+            }
+            room.state.playing = true;
+          } else {
+            // pause: accumulate elapsed into base and clear startedAt
+            if (room.state.startedAtMs) {
+              const elapsedSec = (now - room.state.startedAtMs) / 1000;
+              room.state.playheadPositionSec += elapsedSec;
+              room.state.startedAtMs = null;
+            }
+            room.state.playing = false;
+          }
+          broadcast(roomId, {
+            type: "room_state",
+            roomId,
+            state: buildStatePayload(roomId),
+          });
         }
         break;
 
       case "updateVideo":
         if (state?.currentVideo !== undefined) {
+          // starting a new video resets timing and starts playing from 0 by default
           room.state.currentVideo = state.currentVideo;
-          broadcast(roomId, { type: "room_state", roomId, state: room.state });
+          room.state.playing = true;
+          room.state.playheadPositionSec = 0;
+          room.state.startedAtMs = Date.now();
+          broadcast(roomId, {
+            type: "room_state",
+            roomId,
+            state: buildStatePayload(roomId),
+          });
         }
         break;
 
       case "updateQueue":
         if (Array.isArray(state?.queue)) {
           room.state.queue = state.queue;
-          broadcast(roomId, { type: "room_state", roomId, state: room.state });
+          broadcast(roomId, {
+            type: "room_state",
+            roomId,
+            state: buildStatePayload(roomId),
+          });
         }
         break;
 
@@ -130,10 +209,9 @@ wss.on("connection", (ws) => {
     for (const [roomId, room] of rooms.entries()) {
       if (room.clients.has(ws)) {
         room.clients.delete(ws);
-        const name = ws.userName;
-        if (name) {
+        if (ws.memberId) {
           room.state.members = room.state.members.filter(
-            (m) => m.name !== name
+            (m) => m.id !== ws.memberId
           );
           broadcast(roomId, { type: "room_state", roomId, state: room.state });
         }

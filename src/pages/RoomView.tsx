@@ -1,10 +1,7 @@
-import Header from "../components/Header";
-import VideoPlayer from "../components/VideoPlayer";
-import Search from "../components/Search";
-import Queue from "../components/Queue";
-import Members from "../components/Members";
+import { VideoPlayer, Search, Queue, Members, Header } from "../App";
 
 interface Member {
+  id?: string;
   name: string;
   joinedAt: number;
 }
@@ -14,13 +11,11 @@ interface SearchResult {
   title: string;
   thumbnail: string;
   channel: string;
-  timestamp?: number;
 }
 
 interface QueueItem extends SearchResult {
   addedBy?: string;
   addedAt?: number;
-  timestamp?: number;
 }
 
 interface RoomViewProps {
@@ -29,6 +24,8 @@ interface RoomViewProps {
   queue: QueueItem[];
   currentVideo: QueueItem | null;
   isPlaying: boolean;
+  playbackBaseSec: number;
+  playbackStartedAtMs: number | null;
   showQueue: boolean;
   searchQuery: string;
   isSearching: boolean;
@@ -43,7 +40,6 @@ interface RoomViewProps {
   onTogglePlayPause: () => void;
   onSkipToNext: () => void;
   onVideoEnd?: () => void;
-  onSeek?: (timestamp: number) => void;
 }
 
 export default function RoomView({
@@ -52,6 +48,8 @@ export default function RoomView({
   queue,
   currentVideo,
   isPlaying,
+  playbackBaseSec,
+  playbackStartedAtMs,
   showQueue,
   searchQuery,
   isSearching,
@@ -66,7 +64,6 @@ export default function RoomView({
   onTogglePlayPause,
   onSkipToNext,
   onVideoEnd,
-  onSeek,
 }: RoomViewProps) {
   return (
     <div className="min-h-screen bg-slate-950 p-4">
@@ -89,10 +86,11 @@ export default function RoomView({
               currentVideo={currentVideo}
               isPlaying={isPlaying}
               queueLength={queue.length}
+              playbackBaseSec={playbackBaseSec}
+              playbackStartedAtMs={playbackStartedAtMs}
               onTogglePlayPause={onTogglePlayPause}
               onSkipToNext={onSkipToNext}
               onVideoEnd={onVideoEnd}
-              onSeek={onSeek}
             />
 
             {/* Search */}

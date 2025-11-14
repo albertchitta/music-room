@@ -5,6 +5,14 @@ export interface YTPlayer {
   seekTo(seconds: number, allowSeekAhead: boolean): void;
   destroy(): void;
   playVideo(): void;
+  pauseVideo(): void;
+  getPlayerState(): number;
+  // volume & mute controls
+  setVolume(volume: number): void;
+  getVolume(): number;
+  mute(): void;
+  unMute(): void;
+  isMuted(): boolean;
 }
 
 export interface YTPlayerEvent {
