@@ -1029,8 +1029,7 @@ export default function MusicRoom() {
         })
       );
 
-      setCurrentVideo(null);
-      setIsPlaying(false);
+      // Let server broadcast handle state updates
       return;
     }
 
@@ -1039,7 +1038,7 @@ export default function MusicRoom() {
       ...queue[0],
     };
 
-    // Send video update to server
+    // Send video update to server - server will broadcast to all clients
     wsRef.current?.send(
       JSON.stringify({
         type: "updateVideo",
@@ -1048,11 +1047,7 @@ export default function MusicRoom() {
       })
     );
 
-    // Update local UI state
-    setCurrentVideo(nextVideo);
-    setIsPlaying(true);
-
-    // Remove from queue
+    // Remove from queue - server will broadcast to all clients
     const updatedQueue = queue.slice(1);
     wsRef.current?.send(
       JSON.stringify({
@@ -1062,7 +1057,7 @@ export default function MusicRoom() {
       })
     );
 
-    setQueue(updatedQueue);
+    // Don't update local state - let server broadcast handle it for consistency
   }, [queue, roomId]);
 
   const togglePlayPause = async () => {
