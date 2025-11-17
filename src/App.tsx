@@ -23,6 +23,15 @@ import CreateRoomView from "./pages/CreateRoomView";
 import JoinRoomView from "./pages/JoinRoomView";
 import RoomView from "./pages/RoomView";
 
+// Helper function to decode HTML entities in text
+function decodeHtmlEntities(text: string): string {
+  const txt = document.createElement("textarea");
+  txt.innerHTML = text;
+  const decoded = txt.value;
+  txt.remove();
+  return decoded;
+}
+
 declare global {
   interface Window {
     YT: {
@@ -896,9 +905,9 @@ export default function MusicRoom() {
       const results: SearchResult[] = data.items.map(
         (item: YouTubeApiItem) => ({
           id: item.id.videoId,
-          title: item.snippet.title,
+          title: decodeHtmlEntities(item.snippet.title),
           thumbnail: item.snippet.thumbnails.medium.url,
-          channel: item.snippet.channelTitle,
+          channel: decodeHtmlEntities(item.snippet.channelTitle),
         })
       );
 
