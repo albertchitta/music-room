@@ -113,6 +113,7 @@ export function VideoPlayer({
   isPlaying,
   queueLength,
   playbackBaseSec,
+  playbackStartedAtMs,
   onTogglePlayPause,
   onSkipToNext,
   onVideoEnd,
@@ -123,6 +124,9 @@ export function VideoPlayer({
   const onVideoEndRef = useRef<(() => void) | undefined>(onVideoEnd);
   const playerReadyRef = useRef<boolean>(false);
   const hasInitialSeekRef = useRef<boolean>(false);
+  const initialPlaybackBaseRef = useRef<number>(0);
+  const initialPlaybackStartedRef = useRef<number | null>(null);
+  const initialIsPlayingRef = useRef<boolean>(false);
   const [volume, setVolume] = useState<number>(80);
   const [muted, setMuted] = useState<boolean>(false);
 
@@ -144,6 +148,11 @@ export function VideoPlayer({
     currentVideoIdRef.current = currentVideo.id;
     hasInitialSeekRef.current = false;
 
+    // Capture initial playback state when video changes
+    initialPlaybackBaseRef.current = playbackBaseSec;
+    initialPlaybackStartedRef.current = playbackStartedAtMs;
+    initialIsPlayingRef.current = isPlaying;
+
     playerRef.current = new window.YT.Player("youtube-player", {
       height: "100%",
       width: "100%",
@@ -164,9 +173,26 @@ export function VideoPlayer({
               playerRef.current.mute();
             }
           }
-          // Seek to current position when joining room
-          if (playbackBaseSec > 0 && !hasInitialSeekRef.current) {
-            playerRef.current.seekTo(playbackBaseSec, true);
+          // Seek to current position when joining room, accounting for elapsed time
+          if (
+            initialPlaybackBaseRef.current > 0 &&
+            !hasInitialSeekRef.current
+          ) {
+            let targetPosition = initialPlaybackBaseRef.current;
+
+            // If video was playing when we joined, calculate elapsed time since server timestamp
+            if (
+              initialIsPlayingRef.current &&
+              initialPlaybackStartedRef.current
+            ) {
+              const now = Date.now();
+              const elapsed = (now - initialPlaybackStartedRef.current) / 1000;
+              // Subtract 0.5 seconds to account for seek latency and buffer time
+              const adjustedElapsed = Math.max(0, elapsed - 0.5);
+              targetPosition = initialPlaybackBaseRef.current + adjustedElapsed;
+            }
+
+            playerRef.current.seekTo(targetPosition, true);
             hasInitialSeekRef.current = true;
           }
           // Auto-play if isPlaying is true
