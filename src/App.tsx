@@ -1002,8 +1002,6 @@ export default function MusicRoom() {
         // Update local UI state
         setCurrentVideo(videoToPlay);
         setIsPlaying(true);
-        setSearchResults([]);
-        setSearchQuery("");
 
         // VideoPlayer will pick up state changes and load/play the video
       } catch (error) {
