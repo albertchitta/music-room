@@ -60,6 +60,7 @@ declare global {
         seekTo: (seconds: number, allowSeekAhead: boolean) => void;
         getPlayerState: () => number;
         stopVideo: () => void;
+        // volume & mute controls
         setVolume: (volume: number) => void;
         getVolume: () => number;
         mute: () => void;
@@ -140,10 +141,12 @@ export function VideoPlayer({
   const [volume, setVolume] = useState<number>(80);
   const [muted, setMuted] = useState<boolean>(false);
 
+  // Keep callback refs fresh
   useEffect(() => {
     onVideoEndRef.current = onVideoEnd;
   }, [onVideoEnd]);
 
+  // Create/destroy player when video changes
   useEffect(() => {
     if (!window.YT || !currentVideo) return;
     if (currentVideoIdRef.current === currentVideo.id && playerRef.current) {
@@ -156,6 +159,7 @@ export function VideoPlayer({
     currentVideoIdRef.current = currentVideo.id;
     hasInitialSeekRef.current = false;
 
+    // Capture initial playback state when video changes
     initialPlaybackBaseRef.current = playbackBaseSec;
     initialPlaybackStartedRef.current = playbackStartedAtMs;
     initialIsPlayingRef.current = isPlaying;
@@ -173,35 +177,43 @@ export function VideoPlayer({
       events: {
         onReady: () => {
           playerReadyRef.current = true;
+          // Apply initial volume
           if (playerRef.current) {
             playerRef.current.setVolume(volume);
             if (muted) {
               playerRef.current.mute();
             }
           }
+          // Seek to current position when joining room, accounting for elapsed time
           if (
             initialPlaybackBaseRef.current > 0 &&
             !hasInitialSeekRef.current
           ) {
             let targetPosition = initialPlaybackBaseRef.current;
+
+            // If video was playing when we joined, calculate elapsed time since server timestamp
             if (
               initialIsPlayingRef.current &&
               initialPlaybackStartedRef.current
             ) {
               const now = Date.now();
               const elapsed = (now - initialPlaybackStartedRef.current) / 1000;
+              // Subtract 0.5 seconds to account for seek latency and buffer time
               const adjustedElapsed = Math.max(0, elapsed - 0.5);
               targetPosition = initialPlaybackBaseRef.current + adjustedElapsed;
             }
+
             playerRef.current.seekTo(targetPosition, true);
             hasInitialSeekRef.current = true;
           }
+          // Auto-play if isPlaying is true
           if (isPlaying && playerRef.current) {
             playerRef.current.playVideo();
           }
         },
         onStateChange: (event: { data: number }) => {
           if (event.data === 0) {
+            // Video ended
             onVideoEndRef.current?.();
           }
         },
@@ -218,8 +230,10 @@ export function VideoPlayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentVideo?.id]);
 
+  // Apply play/pause state
   useEffect(() => {
     if (!playerRef.current || !currentVideo || !playerReadyRef.current) return;
+
     if (isPlaying) {
       playerRef.current.playVideo();
     } else {
@@ -227,11 +241,13 @@ export function VideoPlayer({
     }
   }, [isPlaying, currentVideo]);
 
+  // Apply volume changes
   useEffect(() => {
     if (!playerRef.current || !playerReadyRef.current) return;
     playerRef.current.setVolume(volume);
   }, [volume]);
 
+  // Apply mute changes
   useEffect(() => {
     if (!playerRef.current || !playerReadyRef.current) return;
     if (muted) {
@@ -253,6 +269,7 @@ export function VideoPlayer({
             {currentVideo.title}
           </h3>
           <p className="text-gray-600 text-sm mb-4">{currentVideo.channel}</p>
+
           <div className="flex items-center gap-4">
             <button
               onClick={onTogglePlayPause}
@@ -362,6 +379,7 @@ export function Search({
         </Button>
       </ButtonGroup>
 
+      {/* Search Results */}
       {searchResults.length > 0 && (
         <div className="space-y-2 max-h-96 overflow-y-auto">
           {searchResults.map((result, index) => (
@@ -534,6 +552,7 @@ export function Header({
 }
 
 export default function MusicRoom() {
+  // Add your YouTube API key here or use environment variable
   const YOUTUBE_API_KEY =
     import.meta.env.VITE_YOUTUBE_API_KEY || "YOUR_API_KEY_HERE";
 
@@ -555,37 +574,11 @@ export default function MusicRoom() {
   );
   const channelRef = useRef<RealtimeChannel | null>(null);
   const memberIdRef = useRef<string>("");
+
+  // Refs to store the latest callback functions for YouTube player events
   const playNextInQueueRef = useRef<(() => Promise<void>) | null>(null);
 
-  // Refs to store latest state for broadcast (avoid stale closures)
-  const currentVideoRef = useRef<QueueItem | null>(null);
-  const queueRef = useRef<QueueItem[]>([]);
-  const isPlayingRef = useRef<boolean>(false);
-  const playbackBaseSecRef = useRef<number>(0);
-  const playbackStartedAtMsRef = useRef<number | null>(null);
-
-  // Keep refs in sync with state
-  useEffect(() => {
-    currentVideoRef.current = currentVideo;
-  }, [currentVideo]);
-
-  useEffect(() => {
-    queueRef.current = queue;
-  }, [queue]);
-
-  useEffect(() => {
-    isPlayingRef.current = isPlaying;
-  }, [isPlaying]);
-
-  useEffect(() => {
-    playbackBaseSecRef.current = playbackBaseSec;
-  }, [playbackBaseSec]);
-
-  useEffect(() => {
-    playbackStartedAtMsRef.current = playbackStartedAtMs;
-  }, [playbackStartedAtMs]);
-
-  // Load YouTube IFrame API
+  // Load the YouTube IFrame API once
   useEffect(() => {
     if (!window.YT) {
       const tag = document.createElement("script");
@@ -593,218 +586,129 @@ export default function MusicRoom() {
       const firstScriptTag = document.getElementsByTagName("script")[0];
       firstScriptTag?.parentNode?.insertBefore(tag, firstScriptTag);
     }
-    window.onYouTubeIframeAPIReady = () => {};
+    window.onYouTubeIframeAPIReady = () => {
+      // API is ready, VideoPlayer will check for window.YT
+    };
   }, []);
 
-  // Broadcast state to room
-  const broadcastState = useCallback(
-    (event: string, payload: Record<string, unknown>) => {
-      if (channelRef.current) {
-        channelRef.current.send({
-          type: "broadcast",
-          event,
-          payload: { ...payload, senderId: memberIdRef.current },
-        });
-      }
+  // Wait for a WebSocket to open (or timeout)
+  const waitForWsOpen = useCallback(
+    (socket: WebSocket | null, timeout: number = 4000): Promise<boolean> => {
+      return new Promise((resolve) => {
+        if (!socket) return resolve(false);
+        if (socket.readyState === WebSocket.OPEN) return resolve(true);
+
+        const onOpen = () => {
+          cleanup();
+          resolve(true);
+        };
+
+        const onClose = () => {
+          cleanup();
+          resolve(false);
+        };
+
+        const timer = setTimeout(() => {
+          cleanup();
+          resolve(false);
+        }, timeout);
+
+        function cleanup() {
+          try {
+            if (socket) {
+              // safe removal
+              (socket as WebSocket).removeEventListener("open", onOpen);
+              (socket as WebSocket).removeEventListener("close", onClose);
+            }
+          } catch {
+            /* ignore */
+          }
+          clearTimeout(timer);
+        }
+
+        socket.addEventListener("open", onOpen);
+        socket.addEventListener("close", onClose);
+      });
     },
     []
   );
 
-  // Setup Supabase Realtime channel
-  useEffect(() => {
-    if (!roomId || !userName) return;
-
-    const channel = supabase.channel(`room:${roomId}`, {
-      config: {
-        presence: {
-          key: memberIdRef.current,
-        },
-      },
-    });
-
-    channelRef.current = channel;
-
-    channel
-      .on("presence", { event: "sync" }, () => {
-        const state = channel.presenceState();
-        const updatedMembers: Member[] = [];
-
-        Object.keys(state).forEach((key) => {
-          const presences = state[key];
-          presences.forEach((presence: Record<string, unknown>) => {
-            updatedMembers.push({
-              id: (presence.id as string) || key,
-              name: (presence.name as string) || "Unknown",
-              joinedAt: (presence.joinedAt as number) || Date.now(),
-            });
-          });
-        });
-
-        setMembers(updatedMembers);
-      })
-      .on(
-        "broadcast",
-        { event: "request_state" },
-        ({ payload }: { payload: { senderId: string } }) => {
-          // When someone requests state, send them the current state
-          if (payload.senderId !== memberIdRef.current && channelRef.current) {
-            // Use refs to get the latest state (not stale closure values)
-            const now = Date.now();
-            const currentPlaying = isPlayingRef.current;
-            const basePosition = playbackBaseSecRef.current;
-            const startedAt = playbackStartedAtMsRef.current;
-
-            // Calculate the current playback position
-            let currentPosition = basePosition;
-            if (currentPlaying && startedAt) {
-              const elapsed = (now - startedAt) / 1000;
-              currentPosition = basePosition + elapsed;
+  // Setup message handlers for a socket and subscribe to a room
+  const attachSocketHandlers = useCallback(
+    (
+      socket: WebSocket,
+      subscribeRoomId?: string,
+      subscribeUserName?: string
+    ) => {
+      try {
+        socket.onopen = () => {
+          try {
+            const targetRoom = subscribeRoomId || roomId;
+            const targetUser = subscribeUserName || userName;
+            if (targetRoom) {
+              socket.send(
+                JSON.stringify({
+                  type: "subscribe",
+                  roomId: targetRoom,
+                  userName: targetUser,
+                })
+              );
             }
-
-            const latestState = {
-              currentVideo: currentVideoRef.current,
-              queue: queueRef.current,
-              playing: currentPlaying,
-              playheadPositionSec: currentPosition,
-              startedAtMs: now, // Send current timestamp so joiner can calculate from now
-            };
-
-            console.log(
-              "Received state request, sending current state:",
-              latestState
-            );
-
-            // Small delay to ensure they're ready
-            setTimeout(() => {
-              if (channelRef.current) {
-                channelRef.current.send({
-                  type: "broadcast",
-                  event: "sync_state",
-                  payload: {
-                    ...latestState,
-                    senderId: memberIdRef.current,
-                  },
-                });
+          } catch (e) {
+            console.error("WS send error on open:", e);
+          }
+        };
+        socket.onmessage = (evt) => {
+          try {
+            const msg = JSON.parse(evt.data);
+            if (
+              msg?.type === "room_state" &&
+              msg.roomId === (subscribeRoomId || roomId)
+            ) {
+              const s = msg.state || {};
+              setMembers(s.members || []);
+              setQueue(s.queue || []);
+              // derive absolute position at server time to avoid clock skew
+              const serverNow =
+                typeof s.serverNowMs === "number" ? s.serverNowMs : Date.now();
+              let positionAtServerNow: number;
+              if (typeof s.positionSec === "number") {
+                positionAtServerNow = s.positionSec;
+              } else {
+                const base = Number(s.playheadPositionSec || 0);
+                positionAtServerNow =
+                  base +
+                  (s.startedAtMs ? (serverNow - s.startedAtMs) / 1000 : 0);
               }
-            }, 50);
-          }
-        }
-      )
-      .on(
-        "broadcast",
-        { event: "sync_state" },
-        ({
-          payload,
-        }: {
-          payload: {
-            currentVideo: QueueItem | null;
-            queue: QueueItem[];
-            playing: boolean;
-            playheadPositionSec: number;
-            startedAtMs: number | null;
-            senderId: string;
-          };
-        }) => {
-          if (payload.senderId !== memberIdRef.current) {
-            console.log("Received sync_state:", payload);
-            setCurrentVideo(payload.currentVideo);
-            setQueue(payload.queue);
-            setIsPlaying(payload.playing);
-            setPlaybackBaseSec(payload.playheadPositionSec);
-            setPlaybackStartedAtMs(payload.startedAtMs);
-          }
-        }
-      )
-      .on(
-        "broadcast",
-        { event: "update_video" },
-        ({
-          payload,
-        }: {
-          payload: { currentVideo: QueueItem | null; senderId: string };
-        }) => {
-          if (payload.senderId !== memberIdRef.current) {
-            setCurrentVideo(payload.currentVideo);
-            setIsPlaying(true);
-            setPlaybackBaseSec(0);
-            setPlaybackStartedAtMs(Date.now());
-          }
-        }
-      )
-      .on(
-        "broadcast",
-        { event: "update_queue" },
-        ({
-          payload,
-        }: {
-          payload: { queue: QueueItem[]; senderId: string };
-        }) => {
-          if (payload.senderId !== memberIdRef.current) {
-            setQueue(payload.queue);
-          }
-        }
-      )
-      .on(
-        "broadcast",
-        { event: "update_playing" },
-        ({
-          payload,
-        }: {
-          payload: {
-            playing: boolean;
-            playheadPositionSec?: number;
-            startedAtMs?: number | null;
-            senderId: string;
-          };
-        }) => {
-          if (payload.senderId !== memberIdRef.current) {
-            setIsPlaying(payload.playing);
-            if (typeof payload.playheadPositionSec === "number") {
-              setPlaybackBaseSec(payload.playheadPositionSec);
-            }
-            if (payload.startedAtMs !== undefined) {
-              setPlaybackStartedAtMs(payload.startedAtMs);
-            }
-          }
-        }
-      )
-      .subscribe(async (status) => {
-        if (status === "SUBSCRIBED") {
-          await channel.track({
-            id: memberIdRef.current,
-            name: userName,
-            joinedAt: Date.now(),
-          });
-
-          // Request current state from existing members
-          console.log("New member joined, requesting state...");
-          setTimeout(() => {
-            if (channelRef.current) {
-              channelRef.current.send({
-                type: "broadcast",
-                event: "request_state",
-                payload: {
-                  senderId: memberIdRef.current,
-                },
+              setPlaybackBaseSec(positionAtServerNow);
+              // Always project from server time; local pause disables corrections
+              setPlaybackStartedAtMs(serverNow);
+              setCurrentVideo((prevVideo) => {
+                const newVideo = s.currentVideo || null;
+                if (!prevVideo && !newVideo) return prevVideo;
+                if (!prevVideo || !newVideo) return newVideo;
+                if (prevVideo.id === newVideo.id) return newVideo;
+                return newVideo;
               });
-              console.log("State request sent");
+              // Sync playing state from server
+              setIsPlaying(!!s.playing);
             }
-          }, 200);
-        }
-      });
-
-    return () => {
-      channel.untrack();
-      channel.unsubscribe();
-    };
-  }, [roomId, userName]);
+          } catch (e) {
+            console.error("WS message parse error:", e);
+          }
+        };
+        socket.onclose = () => {
+          if (wsRef.current === socket) wsRef.current = null;
+        };
+      } catch (e) {
+        console.error("Error attaching socket handlers", e);
+      }
+    },
+    [roomId, userName]
+  );
 
   const generateRoomId = () => {
     return Math.random().toString(36).substring(2, 8).toUpperCase();
-  };
-
-  const generateMemberId = () => {
-    return Math.random().toString(36).slice(2) + Date.now().toString(36);
   };
 
   const createRoom = async (e: React.FormEvent) => {
@@ -816,11 +720,35 @@ export default function MusicRoom() {
     }
 
     const newRoomId = generateRoomId();
-    memberIdRef.current = generateMemberId();
 
-    setRoomId(newRoomId);
-    setView("room");
-    toast.success("Room created!");
+    try {
+      // Create WebSocket first to ensure server connection
+      const wsUrl =
+        (import.meta.env.VITE_WS_URL as string) || "ws://localhost:3001";
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+        try {
+          wsRef.current = new WebSocket(wsUrl);
+          attachSocketHandlers(wsRef.current, newRoomId, userName);
+        } catch (e) {
+          console.error("WebSocket connection error:", e);
+          toast.error("Failed to connect to server. Please try again.");
+          return;
+        }
+      }
+
+      // Wait for socket to be ready
+      const ok = await waitForWsOpen(wsRef.current, 3000);
+      if (!ok) {
+        toast.error("Could not connect to server. Please try again.");
+        return;
+      }
+
+      // Set local state and enter room - server will echo back the full state
+      setRoomId(newRoomId);
+      setView("room");
+    } catch (error) {
+      toast.error(`Error creating room. Please try again. ${error}`);
+    }
   };
 
   const joinRoom = async (e: React.FormEvent) => {
@@ -831,10 +759,120 @@ export default function MusicRoom() {
       return;
     }
 
-    memberIdRef.current = generateMemberId();
-    setRoomId(joinRoomId);
-    setView("room");
-    toast.success("Joined room!");
+    try {
+      const wsUrl =
+        (import.meta.env.VITE_WS_URL as string) || "ws://localhost:3001";
+
+      // open a temporary socket to ask the server for the room state
+      const temp = new WebSocket(wsUrl);
+
+      type RoomStateServer = {
+        members?: Member[];
+        queue?: QueueItem[];
+        currentVideo?: QueueItem | null;
+        playing?: boolean;
+        playheadPositionSec?: number;
+        startedAtMs?: number | null;
+        positionSec?: number;
+        serverNowMs?: number;
+      };
+
+      const roomState = await new Promise<RoomStateServer | null>((resolve) => {
+        const timer = setTimeout(() => {
+          cleanup();
+          resolve(null);
+        }, 5000);
+
+        function cleanup() {
+          clearTimeout(timer);
+          try {
+            temp.removeEventListener("open", onOpen);
+            temp.removeEventListener("message", onMessage);
+            temp.removeEventListener("close", onClose);
+          } catch {
+            /* ignore */
+          }
+        }
+
+        function onOpen() {
+          try {
+            temp.send(
+              JSON.stringify({
+                type: "subscribe",
+                roomId: joinRoomId,
+                userName,
+              })
+            );
+          } catch {
+            /* ignore */
+          }
+        }
+
+        function onMessage(evt: MessageEvent) {
+          try {
+            const msg = JSON.parse(evt.data);
+            if (msg?.type === "room_state" && msg.roomId === joinRoomId) {
+              cleanup();
+              resolve(msg.state || {});
+            }
+          } catch {
+            // ignore parse errors
+          }
+        }
+
+        function onClose() {
+          cleanup();
+          resolve(null);
+        }
+
+        temp.addEventListener("open", onOpen);
+        temp.addEventListener("message", onMessage);
+        temp.addEventListener("close", onClose);
+      });
+
+      if (!roomState) {
+        try {
+          temp.close();
+        } catch {
+          /* ignore */
+        }
+        toast.error("Room not found. Please check the room ID.");
+        return;
+      }
+
+      // reuse this socket as the persistent connection
+      wsRef.current = temp;
+      attachSocketHandlers(temp, joinRoomId, userName);
+
+      // set local state from server-provided state and enter room
+      setRoomId(joinRoomId);
+      setMembers(roomState.members || []);
+      setQueue(roomState.queue || []);
+      setCurrentVideo(roomState.currentVideo || null);
+      const serverNow =
+        typeof roomState.serverNowMs === "number"
+          ? roomState.serverNowMs
+          : Date.now();
+      let positionAtServerNow: number;
+      if (typeof roomState.positionSec === "number") {
+        positionAtServerNow = roomState.positionSec;
+      } else {
+        const base = Number(roomState.playheadPositionSec || 0);
+        positionAtServerNow =
+          base +
+          (roomState.startedAtMs
+            ? (serverNow - roomState.startedAtMs) / 1000
+            : 0);
+      }
+      setPlaybackBaseSec(positionAtServerNow);
+      // Always project from server time; local pause disables corrections
+      setPlaybackStartedAtMs(serverNow);
+      // Sync initial playing state from server
+      setIsPlaying(!!roomState.playing);
+      setView("room");
+    } catch (error) {
+      toast.error(`Error joining room. Please try again. ${error}`);
+    }
   };
 
   const searchYouTube = async () => {
@@ -891,22 +929,49 @@ export default function MusicRoom() {
   ): Promise<void> => {
     try {
       if (playNow) {
+        // Play immediately
         await playVideo(video);
       } else {
+        // Add to end of queue
         const updatedQueue: QueueItem[] = [
           ...queue,
           { ...video, addedBy: userName, addedAt: Date.now() },
         ];
 
-        broadcastState("update_queue", { queue: updatedQueue });
+        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+          console.error("No WebSocket connection");
+          toast.error("Lost connection to server");
+          return;
+        }
+
+        // Update queue via WebSocket
+        wsRef.current.send(
+          JSON.stringify({
+            type: "updateQueue",
+            roomId,
+            state: { queue: updatedQueue },
+          })
+        );
+
+        // Optimistically update local state
         setQueue(updatedQueue);
 
+        // If no video is playing, start playing from queue
         if (!currentVideo) {
           const nextVideo: QueueItem = updatedQueue[0];
           await playVideo(nextVideo);
 
+          // Remove from queue after starting playback
           const afterPlayQueue: QueueItem[] = updatedQueue.slice(1);
-          broadcastState("update_queue", { queue: afterPlayQueue });
+          wsRef.current.send(
+            JSON.stringify({
+              type: "updateQueue",
+              roomId,
+              state: { queue: afterPlayQueue },
+            })
+          );
+
+          // Optimistically update local queue
           setQueue(afterPlayQueue);
         }
       }
@@ -920,26 +985,56 @@ export default function MusicRoom() {
       if (!video || !roomId) return;
 
       try {
+        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+          console.error("No WebSocket connection");
+          toast.error("Lost connection to server");
+          return;
+        }
+
         const videoToPlay = { ...video };
 
-        broadcastState("update_video", { currentVideo: videoToPlay });
+        // Send video update to server
+        wsRef.current.send(
+          JSON.stringify({
+            type: "updateVideo",
+            roomId,
+            state: { currentVideo: videoToPlay },
+          })
+        );
+
+        // Update local UI state
         setCurrentVideo(videoToPlay);
         setIsPlaying(true);
-        setPlaybackBaseSec(0);
-        setPlaybackStartedAtMs(Date.now());
+
+        // VideoPlayer will pick up state changes and load/play the video
       } catch (error) {
         console.error("Error playing video:", error);
         toast.error(`Error playing video: ${error}`);
       }
     },
-    [roomId, broadcastState]
+    [roomId]
   );
 
   const removeFromQueue = async (index: number) => {
     try {
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+        console.error("No WebSocket connection");
+        toast.error("Lost connection to server");
+        return;
+      }
+
       const updatedQueue = queue.filter((_, i) => i !== index);
 
-      broadcastState("update_queue", { queue: updatedQueue });
+      // Update queue via WebSocket
+      wsRef.current.send(
+        JSON.stringify({
+          type: "updateQueue",
+          roomId,
+          state: { queue: updatedQueue },
+        })
+      );
+
+      // Optimistically update local state
       setQueue(updatedQueue);
     } catch (error) {
       toast.error(`Error removing from queue: ${error}`);
@@ -953,64 +1048,82 @@ export default function MusicRoom() {
 
   const playNextInQueue = useCallback(async () => {
     if (!queue || queue.length === 0) {
-      broadcastState("update_video", { currentVideo: null });
-      broadcastState("update_playing", {
-        playing: false,
-        playheadPositionSec: 0,
-        startedAtMs: null,
-      });
-      setCurrentVideo(null);
-      setIsPlaying(false);
+      // No more songs in queue
+      wsRef.current?.send(
+        JSON.stringify({
+          type: "updateVideo",
+          roomId,
+          state: { currentVideo: null },
+        })
+      );
+      // When no video, also ensure playing is false
+      wsRef.current?.send(
+        JSON.stringify({
+          type: "updatePlaying",
+          roomId,
+          state: { playing: false },
+        })
+      );
+
+      // Let server broadcast handle state updates
       return;
     }
 
-    const nextVideo = { ...queue[0] };
+    // Get the next video
+    const nextVideo = {
+      ...queue[0],
+    };
 
-    broadcastState("update_video", { currentVideo: nextVideo });
-    setCurrentVideo(nextVideo);
-    setIsPlaying(true);
-    setPlaybackBaseSec(0);
-    setPlaybackStartedAtMs(Date.now());
+    // Send video update to server - server will broadcast to all clients
+    wsRef.current?.send(
+      JSON.stringify({
+        type: "updateVideo",
+        roomId,
+        state: { currentVideo: nextVideo },
+      })
+    );
 
+    // Remove from queue - server will broadcast to all clients
     const updatedQueue = queue.slice(1);
-    broadcastState("update_queue", { queue: updatedQueue });
-    setQueue(updatedQueue);
-  }, [queue, broadcastState]);
+    wsRef.current?.send(
+      JSON.stringify({
+        type: "updateQueue",
+        roomId,
+        state: { queue: updatedQueue },
+      })
+    );
+
+    // Don't update local state - let server broadcast handle it for consistency
+  }, [queue, roomId]);
 
   const togglePlayPause = async () => {
     try {
-      const newPlayingState = !isPlaying;
-      const now = Date.now();
-
-      let newPlayheadPosition = playbackBaseSec;
-      let newStartedAt: number | null = null;
-
-      if (newPlayingState) {
-        // Resuming
-        newStartedAt = now - Math.floor(playbackBaseSec * 1000);
-      } else {
-        // Pausing
-        if (playbackStartedAtMs) {
-          const elapsed = (now - playbackStartedAtMs) / 1000;
-          newPlayheadPosition = playbackBaseSec + elapsed;
-        }
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+        console.error("No WebSocket connection");
+        toast.error("Lost connection to server");
+        return;
       }
 
-      broadcastState("update_playing", {
-        playing: newPlayingState,
-        playheadPositionSec: newPlayheadPosition,
-        startedAtMs: newStartedAt,
-      });
+      const newPlayingState = !isPlaying;
 
+      // Send playing state update to server
+      wsRef.current.send(
+        JSON.stringify({
+          type: "updatePlaying",
+          roomId,
+          state: { playing: newPlayingState },
+        })
+      );
+
+      // Optimistically update local state
       setIsPlaying(newPlayingState);
-      setPlaybackBaseSec(newPlayheadPosition);
-      setPlaybackStartedAtMs(newStartedAt);
     } catch (error) {
       console.error("Error toggling play/pause:", error);
       toast.error("Error controlling playback");
     }
   };
 
+  // Keep the refs updated with the latest callback functions
   useEffect(() => {
     playNextInQueueRef.current = playNextInQueue;
   }, [playNextInQueue]);
@@ -1021,12 +1134,17 @@ export default function MusicRoom() {
   };
 
   const leaveRoom = useCallback(async () => {
-    if (channelRef.current) {
-      await channelRef.current.untrack();
-      await channelRef.current.unsubscribe();
-      channelRef.current = null;
+    // Notify server and close socket
+    try {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: "leave", roomId, userName }));
+        wsRef.current.close();
+      }
+    } catch (e) {
+      console.error("Error notifying leave:", e);
     }
 
+    // Reset all local state
     setView("home");
     setRoomId("");
     setCurrentVideo(null);
@@ -1035,8 +1153,9 @@ export default function MusicRoom() {
     setSearchResults([]);
     setQueue([]);
     setSearchQuery("");
-  }, []);
+  }, [roomId, userName]);
 
+  // Handle user leaving the page
   useEffect(() => {
     if (roomId && userName) {
       window.addEventListener("beforeunload", leaveRoom);
@@ -1046,6 +1165,7 @@ export default function MusicRoom() {
     }
   }, [roomId, userName, leaveRoom]);
 
+  // Home View
   if (view === "home") {
     return (
       <HomeView
@@ -1055,6 +1175,7 @@ export default function MusicRoom() {
     );
   }
 
+  // Create Room View
   if (view === "create") {
     return (
       <CreateRoomView
@@ -1066,6 +1187,7 @@ export default function MusicRoom() {
     );
   }
 
+  // Join Room View
   if (view === "join") {
     return (
       <JoinRoomView
@@ -1079,6 +1201,7 @@ export default function MusicRoom() {
     );
   }
 
+  // Room View
   return (
     <RoomView
       roomId={roomId}

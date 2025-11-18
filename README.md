@@ -1,15 +1,87 @@
-# React + TypeScript + Vite
+# Music Room
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A real-time collaborative music listening room built with React, TypeScript, Vite, and Supabase Realtime.
 
-Currently, two official plugins are available:
+## Features
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- 🎵 Create or join music rooms
+- 🔄 Real-time synchronization across all participants
+- 🎬 YouTube video playback
+- 📋 Shared queue management
+- 👥 Live member presence tracking
+- 🎮 Play/pause controls synchronized for everyone
 
-## React Compiler
+## Setup
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+### Prerequisites
+
+- Node.js (v18 or higher)
+- A Supabase account (free tier works)
+- YouTube Data API v3 key
+
+### 1. Clone and Install
+
+```bash
+git clone <your-repo-url>
+cd music-room
+npm install
+```
+
+### 2. Configure Supabase
+
+1. Go to [https://supabase.com](https://supabase.com) and create a new project
+2. Once your project is ready, go to **Settings** > **API**
+3. Copy your **Project URL** and **anon/public key**
+
+### 3. Get YouTube API Key
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com)
+2. Create a new project or select an existing one
+3. Enable the **YouTube Data API v3**
+4. Create credentials (API Key)
+5. Copy your API key
+
+### 4. Environment Variables
+
+Create a `.env` file in the project root:
+
+```env
+VITE_SUPABASE_URL=https://xxxxx.supabase.co
+VITE_SUPABASE_ANON_KEY=your_anon_key_here
+VITE_YOUTUBE_API_KEY=your_youtube_api_key_here
+```
+
+### 5. Run Development Server
+
+```bash
+npm run dev
+```
+
+The app will be available at `http://localhost:5173`
+
+## Deployment (Vercel)
+
+1. Push your code to GitHub
+2. Import your repository in Vercel
+3. Add the environment variables in Vercel project settings:
+   - `VITE_SUPABASE_URL`
+   - `VITE_SUPABASE_ANON_KEY`
+   - `VITE_YOUTUBE_API_KEY`
+4. Deploy!
+
+## Tech Stack
+
+- **Frontend**: React + TypeScript + Vite
+- **Realtime**: Supabase Realtime (Broadcast + Presence)
+- **Video**: YouTube IFrame API
+- **UI**: Radix UI + Tailwind CSS
+- **Deployment**: Vercel-ready (serverless)
+
+## Migration from WebSocket
+
+This project was migrated from a custom WebSocket server to Supabase Realtime for better scalability and Vercel compatibility. See [SUPABASE_MIGRATION.md](./SUPABASE_MIGRATION.md) for details.
+
+---
 
 ## Expanding the ESLint configuration
 
